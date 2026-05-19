@@ -1,13 +1,17 @@
-// Database layer using Neon Postgres (works on Vercel serverless + locally).
+// Database layer using pg (works locally + Vercel + everywhere).
 
-const { neon } = require('@neondatabase/serverless');
+const { Pool } = require('pg');
 
-let sql;
+let pool;
 
 async function initDB() {
-  sql = neon(process.env.DATABASE_URL);
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+    max: 5,
+  });
 
-  await sql`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS expenses (
       id SERIAL PRIMARY KEY,
       amount NUMERIC NOT NULL,
@@ -17,23 +21,34 @@ async function initDB() {
       month TEXT NOT NULL,
       telegram_user_id TEXT
     )
-  `;
-  await sql`
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS budgets (
       id SERIAL PRIMARY KEY,
       monthly_budget NUMERIC NOT NULL,
       month TEXT NOT NULL UNIQUE
     )
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS idx_expenses_month ON expenses(month)`;
-  await sql`CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)`;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_expenses_month ON expenses(month)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)`);
 
   console.log('[DB] Neon Postgres ready');
 }
 
-function getSQL() {
-  if (!sql) sql = neon(process.env.DATABASE_URL);
-  return sql;
+function getPool() {
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 5,
+    });
+  }
+  return pool;
+}
+
+async function query(text, params) {
+  const { rows } = await getPool().query(text, params);
+  return rows;
 }
 
 // ---------- Helpers ----------
@@ -44,10 +59,7 @@ function currentMonth() {
 
 function todayISO() {
   const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function weekAgoISO() {
@@ -62,153 +74,138 @@ function castExpense(row) {
   return { ...row, id: Number(row.id), amount: Number(row.amount) };
 }
 
+function castSummary(row) {
+  return { ...row, total: Number(row.total), count: Number(row.count) };
+}
+
+function castDaySummary(row) {
+  return { ...row, total: Number(row.total) };
+}
+
 // ---------- Expense queries ----------
 async function addExpense({ amount, category, description, date, telegram_user_id }) {
-  const s = getSQL();
   const dateValue = date || new Date().toISOString();
   const month = dateValue.slice(0, 7);
-  const rows = await s`
-    INSERT INTO expenses (amount, category, description, date, month, telegram_user_id)
-    VALUES (${amount}, ${category}, ${description || ''}, ${dateValue}, ${month}, ${telegram_user_id || null})
-    RETURNING id
-  `;
+  const rows = await query(
+    `INSERT INTO expenses (amount, category, description, date, month, telegram_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [amount, category, description || '', dateValue, month, telegram_user_id || null]
+  );
   return { id: Number(rows[0].id), amount, category, description, date: dateValue, month };
 }
 
 async function getExpenses({ month } = {}) {
-  const s = getSQL();
-  let rows;
   if (month) {
-    rows = await s`SELECT * FROM expenses WHERE month = ${month} ORDER BY date DESC`;
-  } else {
-    rows = await s`SELECT * FROM expenses ORDER BY date DESC`;
+    return (await query('SELECT * FROM expenses WHERE month = $1 ORDER BY date DESC', [month])).map(castExpense);
   }
-  return rows.map(castExpense);
+  return (await query('SELECT * FROM expenses ORDER BY date DESC')).map(castExpense);
 }
 
 async function getTodayExpenses() {
-  const s = getSQL();
   const today = todayISO();
-  const rows = await s`SELECT * FROM expenses WHERE substring(date, 1, 10) = ${today} ORDER BY date DESC`;
-  return rows.map(castExpense);
+  return (await query(
+    "SELECT * FROM expenses WHERE substring(date, 1, 10) = $1 ORDER BY date DESC", [today]
+  )).map(castExpense);
 }
 
 async function getRecentExpenses(limit = 10) {
-  const s = getSQL();
-  const rows = await s`SELECT * FROM expenses ORDER BY date DESC LIMIT ${limit}`;
-  return rows.map(castExpense);
+  return (await query('SELECT * FROM expenses ORDER BY date DESC LIMIT $1', [limit])).map(castExpense);
 }
 
 async function deleteExpense(id) {
-  const s = getSQL();
-  const rows = await s`DELETE FROM expenses WHERE id = ${id} RETURNING id`;
+  const rows = await query('DELETE FROM expenses WHERE id = $1 RETURNING id', [id]);
   return rows.length > 0;
 }
 
 async function getMonthlyTotal(month) {
-  const s = getSQL();
   month = month || currentMonth();
-  const rows = await s`SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE month = ${month}`;
+  const rows = await query('SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE month = $1', [month]);
   return Number(rows[0].total);
 }
 
 async function getWeeklyTotal() {
-  const s = getSQL();
   const from = weekAgoISO();
-  const rows = await s`SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE substring(date, 1, 10) >= ${from}`;
+  const rows = await query(
+    "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE substring(date, 1, 10) >= $1", [from]
+  );
   return Number(rows[0].total);
 }
 
 async function getTodayTotal() {
-  const s = getSQL();
   const today = todayISO();
-  const rows = await s`SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE substring(date, 1, 10) = ${today}`;
+  const rows = await query(
+    "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE substring(date, 1, 10) = $1", [today]
+  );
   return Number(rows[0].total);
 }
 
 async function getCategorySummary(month) {
-  const s = getSQL();
   month = month || currentMonth();
-  const rows = await s`
-    SELECT category, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
-    FROM expenses WHERE month = ${month}
-    GROUP BY category ORDER BY total DESC
-  `;
-  return rows.map(r => ({ ...r, total: Number(r.total), count: Number(r.count) }));
+  return (await query(
+    `SELECT category, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+     FROM expenses WHERE month = $1 GROUP BY category ORDER BY total DESC`, [month]
+  )).map(castSummary);
 }
 
 async function getTodayCategorySummary() {
-  const s = getSQL();
   const today = todayISO();
-  const rows = await s`
-    SELECT category, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
-    FROM expenses WHERE substring(date, 1, 10) = ${today}
-    GROUP BY category ORDER BY total DESC
-  `;
-  return rows.map(r => ({ ...r, total: Number(r.total), count: Number(r.count) }));
+  return (await query(
+    `SELECT category, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+     FROM expenses WHERE substring(date, 1, 10) = $1 GROUP BY category ORDER BY total DESC`, [today]
+  )).map(castSummary);
 }
 
 async function getWeekCategorySummary() {
-  const s = getSQL();
   const from = weekAgoISO();
-  const rows = await s`
-    SELECT category, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
-    FROM expenses WHERE substring(date, 1, 10) >= ${from}
-    GROUP BY category ORDER BY total DESC
-  `;
-  return rows.map(r => ({ ...r, total: Number(r.total), count: Number(r.count) }));
+  return (await query(
+    `SELECT category, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+     FROM expenses WHERE substring(date, 1, 10) >= $1 GROUP BY category ORDER BY total DESC`, [from]
+  )).map(castSummary);
 }
 
 async function getWeekExpenses() {
-  const s = getSQL();
   const from = weekAgoISO();
-  const rows = await s`SELECT * FROM expenses WHERE substring(date, 1, 10) >= ${from} ORDER BY date DESC`;
-  return rows.map(castExpense);
+  return (await query(
+    "SELECT * FROM expenses WHERE substring(date, 1, 10) >= $1 ORDER BY date DESC", [from]
+  )).map(castExpense);
 }
 
 async function getWeekDailySummary() {
-  const s = getSQL();
   const from = weekAgoISO();
-  const rows = await s`
-    SELECT substring(date, 1, 10) AS day, COALESCE(SUM(amount), 0) AS total
-    FROM expenses WHERE substring(date, 1, 10) >= ${from}
-    GROUP BY day ORDER BY day ASC
-  `;
-  return rows.map(r => ({ ...r, total: Number(r.total) }));
+  return (await query(
+    `SELECT substring(date, 1, 10) AS day, COALESCE(SUM(amount), 0) AS total
+     FROM expenses WHERE substring(date, 1, 10) >= $1 GROUP BY day ORDER BY day ASC`, [from]
+  )).map(castDaySummary);
 }
 
 async function getDailySummary(month) {
-  const s = getSQL();
   month = month || currentMonth();
-  const rows = await s`
-    SELECT substring(date, 1, 10) AS day, COALESCE(SUM(amount), 0) AS total
-    FROM expenses WHERE month = ${month}
-    GROUP BY day ORDER BY day ASC
-  `;
-  return rows.map(r => ({ ...r, total: Number(r.total) }));
+  return (await query(
+    `SELECT substring(date, 1, 10) AS day, COALESCE(SUM(amount), 0) AS total
+     FROM expenses WHERE month = $1 GROUP BY day ORDER BY day ASC`, [month]
+  )).map(castDaySummary);
 }
 
 // ---------- Budget queries ----------
 async function getBudget(month) {
-  const s = getSQL();
   month = month || currentMonth();
-  const rows = await s`SELECT * FROM budgets WHERE month = ${month}`;
+  const rows = await query('SELECT * FROM budgets WHERE month = $1', [month]);
   return rows.length ? Number(rows[0].monthly_budget) : 5000;
 }
 
 async function setBudget(amount, month) {
-  const s = getSQL();
   month = month || currentMonth();
-  await s`
-    INSERT INTO budgets (monthly_budget, month) VALUES (${amount}, ${month})
-    ON CONFLICT(month) DO UPDATE SET monthly_budget = EXCLUDED.monthly_budget
-  `;
+  await query(
+    `INSERT INTO budgets (monthly_budget, month) VALUES ($1, $2)
+     ON CONFLICT(month) DO UPDATE SET monthly_budget = EXCLUDED.monthly_budget`,
+    [amount, month]
+  );
   return amount;
 }
 
 module.exports = {
   initDB,
-  getSQL,
+  getPool,
   currentMonth,
   todayISO,
   addExpense,

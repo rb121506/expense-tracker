@@ -7,14 +7,19 @@
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": ["expense", "tracker", "telegram", "bot"],
+  "keywords": [
+    "expense",
+    "tracker",
+    "telegram",
+    "bot"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@neondatabase/serverless": "^0.10.4",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "pg": "^8.21.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"
