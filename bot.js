@@ -1,0 +1,297 @@
+// Telegram bot logic.
+// Listens for commands and quick-log messages, writes to SQLite via database.js.
+
+const TelegramBot = require('node-telegram-bot-api');
+const db = require('./database');
+
+// ---------- Category keyword map ----------
+const CATEGORY_KEYWORDS = {
+  Food: ['lunch', 'dinner', 'breakfast', 'food', 'dominos', 'zomato', 'swiggy', 'zepto', 'blinkit', 'chai', 'coffee', 'restaurant', 'biryani', 'pizza', 'snacks'],
+  Transport: ['auto', 'uber', 'ola', 'metro', 'bus', 'rickshaw', 'petrol', 'cab', 'rapido'],
+  Entertainment: ['movie', 'netflix', 'spotify', 'game', 'concert', 'bowling'],
+  College: ['books', 'printing', 'xerox', 'stationery', 'fees', 'lab'],
+  Gym: ['gym', 'protein', 'supplement', 'fitness'],
+  Shopping: ['clothes', 'shoes', 'amazon', 'flipkart', 'mall', 'shirt', 'jeans'],
+  Health: ['medicine', 'pharmacy', 'doctor', 'chemist'],
+  Skincare: ['moisturizer', 'sunscreen', 'facewash', 'skincare', 'serum'],
+};
+
+const CATEGORY_EMOJI = {
+  Food: '🍔',
+  Transport: '🚗',
+  Entertainment: '🎬',
+  College: '🎓',
+  Gym: '💪',
+  Shopping: '🛍️',
+  Health: '💊',
+  Skincare: '✨',
+  Miscellaneous: '📦',
+};
+
+function categorize(text) {
+  const lower = text.toLowerCase();
+  for (const [cat, words] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (words.some((w) => lower.includes(w))) return cat;
+  }
+  return 'Miscellaneous';
+}
+
+function formatRupees(n) {
+  return `₹${Number(n).toLocaleString('en-IN')}`;
+}
+
+function formatDate(dateStr) {
+  const d = new Date(dateStr);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+function formatTime(dateStr) {
+  const d = new Date(dateStr);
+  let hh = d.getHours();
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ampm = hh >= 12 ? 'PM' : 'AM';
+  hh = hh % 12 || 12;
+  return `${hh}:${mm} ${ampm}`;
+}
+
+// In-memory conversation state for /add multi-step flow
+const addState = new Map(); // chatId -> { step, amount, category, description }
+
+function startBot(token, ownerId) {
+  if (!token || token === 'your_token_here') {
+    console.warn('[BOT] TELEGRAM_BOT_TOKEN not set — bot is disabled. Update .env to enable.');
+    return null;
+  }
+
+  const bot = new TelegramBot(token, { polling: true });
+  console.log('[BOT] Telegram bot started (polling).');
+
+  const allowed = (msg) => {
+    if (!ownerId || ownerId === 'your_telegram_id_here') return true; // open mode
+    return String(msg.from.id) === String(ownerId);
+  };
+
+  const reply = (msg, text, opts = {}) =>
+    bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown', ...opts });
+
+  // ---------- /start ----------
+  bot.onText(/^\/start$/, (msg) => {
+    if (!allowed(msg)) return;
+    reply(
+      msg,
+      `👋 *Welcome to your Expense Tracker!*\n\n` +
+        `Just type \`amount description\` to log expenses fast.\n` +
+        `Examples:\n` +
+        `• \`150 lunch\`\n` +
+        `• \`500 auto\`\n` +
+        `• \`1200 gym\`\n\n` +
+        `Type /help to see all commands.`
+    );
+  });
+
+  // ---------- /help ----------
+  bot.onText(/^\/help$/, (msg) => {
+    if (!allowed(msg)) return;
+    reply(
+      msg,
+      `*📖 Commands:*\n\n` +
+        `/start — welcome message\n` +
+        `/add — add an expense step-by-step\n` +
+        `/summary — week & month totals\n` +
+        `/today — today's expenses\n` +
+        `/categories — spending by category\n` +
+        `/budget — monthly budget usage\n` +
+        `/setbudget [amount] — set monthly budget\n` +
+        `/history — last 10 expenses\n` +
+        `/delete [id] — delete an expense\n` +
+        `/help — this menu\n\n` +
+        `💡 *Quick log:* just send \`amount description\`\n` +
+        `e.g. \`80 chai\``
+    );
+  });
+
+  // ---------- /summary ----------
+  bot.onText(/^\/summary$/, (msg) => {
+    if (!allowed(msg)) return;
+    const week = db.getWeeklyTotal();
+    const month = db.getMonthlyTotal();
+    reply(
+      msg,
+      `📊 *Spending Summary*\n\n` +
+        `📅 This week: *${formatRupees(week)}*\n` +
+        `🗓️ This month: *${formatRupees(month)}*`
+    );
+  });
+
+  // ---------- /today ----------
+  bot.onText(/^\/today$/, (msg) => {
+    if (!allowed(msg)) return;
+    const items = db.getTodayExpenses();
+    if (items.length === 0) {
+      return reply(msg, `🌱 No expenses logged today. Nice!`);
+    }
+    const lines = items.map(
+      (e) =>
+        `• ${formatRupees(e.amount)} — ${e.description || '—'} _(${CATEGORY_EMOJI[e.category] || ''} ${e.category})_  \`#${e.id}\``
+    );
+    const total = items.reduce((s, e) => s + e.amount, 0);
+    reply(msg, `📅 *Today's Expenses*\n\n${lines.join('\n')}\n\n*Total: ${formatRupees(total)}*`);
+  });
+
+  // ---------- /categories ----------
+  bot.onText(/^\/categories$/, (msg) => {
+    if (!allowed(msg)) return;
+    const rows = db.getCategorySummary();
+    if (rows.length === 0) return reply(msg, `No expenses this month yet.`);
+    const total = rows.reduce((s, r) => s + r.total, 0);
+    const lines = rows.map((r) => {
+      const pct = total ? ((r.total / total) * 100).toFixed(0) : 0;
+      return `${CATEGORY_EMOJI[r.category] || '📦'} *${r.category}* — ${formatRupees(r.total)} _(${pct}%)_`;
+    });
+    reply(msg, `📊 *Category Breakdown (${db.currentMonth()})*\n\n${lines.join('\n')}\n\n*Total: ${formatRupees(total)}*`);
+  });
+
+  // ---------- /budget ----------
+  bot.onText(/^\/budget$/, (msg) => {
+    if (!allowed(msg)) return;
+    const budget = db.getBudget();
+    const spent = db.getMonthlyTotal();
+    const remaining = budget - spent;
+    const pct = budget ? ((spent / budget) * 100).toFixed(1) : 0;
+    let warning = '';
+    if (pct >= 100) warning = '\n\n🚨 *You are over budget!*';
+    else if (pct >= 80) warning = '\n\n⚠️ *Warning: 80%+ of budget used.*';
+    reply(
+      msg,
+      `💰 *Monthly Budget*\n\n` +
+        `Budget: *${formatRupees(budget)}*\n` +
+        `Spent: *${formatRupees(spent)}* (${pct}%)\n` +
+        `Remaining: *${formatRupees(remaining)}*` +
+        warning
+    );
+  });
+
+  // ---------- /setbudget ----------
+  bot.onText(/^\/setbudget(?:\s+(\d+(?:\.\d+)?))?$/, (msg, match) => {
+    if (!allowed(msg)) return;
+    const amt = match[1] ? parseFloat(match[1]) : NaN;
+    if (!amt || amt <= 0) {
+      return reply(msg, `Usage: \`/setbudget 5000\``);
+    }
+    db.setBudget(amt);
+    reply(msg, `✅ Monthly budget set to *${formatRupees(amt)}*`);
+  });
+
+  // ---------- /history ----------
+  bot.onText(/^\/history$/, (msg) => {
+    if (!allowed(msg)) return;
+    const items = db.getRecentExpenses(10);
+    if (items.length === 0) return reply(msg, `No expenses logged yet.`);
+    const lines = items.map(
+      (e) =>
+        `\`#${e.id}\` ${formatDate(e.date)} — ${formatRupees(e.amount)} ${e.description || '—'} _(${CATEGORY_EMOJI[e.category] || ''} ${e.category})_`
+    );
+    reply(msg, `📜 *Last 10 Expenses*\n\n${lines.join('\n')}`);
+  });
+
+  // ---------- /delete ----------
+  bot.onText(/^\/delete(?:\s+(\d+))?$/, (msg, match) => {
+    if (!allowed(msg)) return;
+    const id = match[1] ? parseInt(match[1], 10) : null;
+    if (!id) return reply(msg, `Usage: \`/delete 12\` (the ID shown in /history)`);
+    const ok = db.deleteExpense(id);
+    reply(msg, ok ? `🗑️ Deleted expense #${id}` : `❌ No expense with id #${id}`);
+  });
+
+  // ---------- /add (step-by-step) ----------
+  bot.onText(/^\/add$/, (msg) => {
+    if (!allowed(msg)) return;
+    addState.set(msg.chat.id, { step: 'amount' });
+    reply(msg, `💸 *Add Expense*\n\nStep 1: How much did you spend? (just type the number)`);
+  });
+
+  // ---------- Quick logging + multi-step continuation ----------
+  bot.on('message', (msg) => {
+    if (!allowed(msg)) return;
+    if (!msg.text) return;
+    if (msg.text.startsWith('/')) return; // commands handled above
+
+    const chatId = msg.chat.id;
+    const state = addState.get(chatId);
+
+    // ----- /add flow -----
+    if (state) {
+      if (state.step === 'amount') {
+        const amt = parseFloat(msg.text.trim());
+        if (!amt || amt <= 0) return reply(msg, `Please enter a valid number, e.g. \`150\``);
+        state.amount = amt;
+        state.step = 'category';
+        const cats = Object.keys(CATEGORY_KEYWORDS).concat('Miscellaneous');
+        return reply(
+          msg,
+          `Step 2: What category?\n\n${cats.map((c) => `• ${CATEGORY_EMOJI[c] || ''} ${c}`).join('\n')}\n\nJust type the category name.`
+        );
+      }
+      if (state.step === 'category') {
+        const input = msg.text.trim();
+        const cats = Object.keys(CATEGORY_KEYWORDS).concat('Miscellaneous');
+        const match = cats.find((c) => c.toLowerCase() === input.toLowerCase()) || categorize(input);
+        state.category = match;
+        state.step = 'description';
+        return reply(msg, `Step 3: Short description? (or send "skip")`);
+      }
+      if (state.step === 'description') {
+        const desc = msg.text.trim().toLowerCase() === 'skip' ? '' : msg.text.trim();
+        const entry = db.addExpense({
+          amount: state.amount,
+          category: state.category,
+          description: desc,
+          telegram_user_id: String(msg.from.id),
+        });
+        addState.delete(chatId);
+        const today = db.getTodayTotal();
+        return reply(
+          msg,
+          `✅ Logged ${formatRupees(entry.amount)} for ${desc || state.category} under ${CATEGORY_EMOJI[state.category] || ''} *${state.category}*\n` +
+            `📅 ${formatDate(entry.date)}, ${formatTime(entry.date)}\n\n` +
+            `Today's total: *${formatRupees(today)}*`
+        );
+      }
+    }
+
+    // ----- Quick log: "amount description" -----
+    const quick = msg.text.trim().match(/^(\d+(?:\.\d+)?)\s+(.+)$/);
+    if (quick) {
+      const amount = parseFloat(quick[1]);
+      const description = quick[2].trim();
+      const category = categorize(description);
+      const entry = db.addExpense({
+        amount,
+        category,
+        description,
+        telegram_user_id: String(msg.from.id),
+      });
+      const today = db.getTodayTotal();
+      return reply(
+        msg,
+        `✅ Got it! Logged ${formatRupees(amount)} for *${description}* under ${CATEGORY_EMOJI[category] || ''} *${category}*\n` +
+          `📅 ${formatDate(entry.date)}, ${formatTime(entry.date)}\n\n` +
+          `Your total spending today: *${formatRupees(today)}*`
+      );
+    }
+
+    // Fallback hint
+    reply(msg, `🤔 I didn't catch that. Try \`150 lunch\` or /help`);
+  });
+
+  bot.on('polling_error', (err) => {
+    console.error('[BOT] polling_error:', err.code || err.message);
+  });
+
+  return bot;
+}
+
+module.exports = { startBot, categorize, CATEGORY_KEYWORDS, CATEGORY_EMOJI };

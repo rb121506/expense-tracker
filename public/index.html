@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Expenses · Ledger</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..700,0..100&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="brand">
+        <p class="kicker" id="current-period">—</p>
+        <h1>Expenses<span class="serif-dot">.</span></h1>
+      </div>
+      <button id="refresh-btn" class="link-btn" aria-label="Refresh">refresh &#x21bb;</button>
+    </header>
+
+    <main class="container">
+
+      <!-- Hero -->
+      <section class="hero">
+        <p class="kicker">Spent this month</p>
+        <div class="hero-number" id="stat-spent">&#x20B9;0</div>
+        <div class="hero-stats">
+          <div class="hero-stat">
+            <span class="kicker">Budget</span>
+            <span id="stat-budget" class="serif">&#x20B9;0</span>
+          </div>
+          <div class="hero-stat">
+            <span class="kicker">Remaining</span>
+            <span id="stat-remaining" class="serif">&#x20B9;0</span>
+          </div>
+          <div class="hero-stat">
+            <span class="kicker">Entries</span>
+            <span id="stat-count" class="serif">0</span>
+          </div>
+        </div>
+      </section>
+
+      <hr class="hairline" />
+
+      <!-- Quick totals: Today / Week -->
+      <section class="section">
+        <div class="quick-totals">
+          <div class="quick-total">
+            <span class="kicker">Today</span>
+            <span id="stat-today" class="serif quick-total-num">&#x20B9;0</span>
+          </div>
+          <div class="quick-total-divider"></div>
+          <div class="quick-total">
+            <span class="kicker">This week</span>
+            <span id="stat-week" class="serif quick-total-num">&#x20B9;0</span>
+          </div>
+        </div>
+      </section>
+
+      <hr class="hairline" />
+
+      <!-- Budget -->
+      <section class="section">
+        <div class="row spread">
+          <h2>Budget</h2>
+          <span class="kicker" id="budget-percent">0%</span>
+        </div>
+        <div class="thin-bar">
+          <div class="thin-bar-fill" id="budget-bar"></div>
+        </div>
+        <p id="budget-warning" class="warning hidden"></p>
+        <form id="budget-form" class="underline-form" autocomplete="off">
+          <input id="budget-input" type="number" min="1" step="1" placeholder="Set a new monthly budget" />
+          <button type="submit" class="link-btn">save &rarr;</button>
+        </form>
+      </section>
+
+      <hr class="hairline" />
+
+      <!-- Tabbed breakdown -->
+      <section class="section">
+        <div class="row spread">
+          <h2>Breakdown</h2>
+          <div class="tab-bar">
+            <button class="tab active" data-tab="today">Today</button>
+            <button class="tab" data-tab="week">Week</button>
+            <button class="tab" data-tab="month">Month</button>
+          </div>
+        </div>
+
+        <!-- Tab panels -->
+        <div class="tab-panel active" id="panel-today">
+          <div class="panel-header">
+            <span class="panel-total serif" id="panel-today-total">&#x20B9;0</span>
+            <span class="kicker" id="panel-today-count">0 entries</span>
+          </div>
+          <div class="category-bars" id="today-categories"></div>
+          <div class="panel-table-wrap">
+            <table class="ledger compact">
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th>Category</th>
+                  <th class="right">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="today-tbody">
+                <tr><td colspan="3" class="muted center">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="panel-week">
+          <div class="panel-header">
+            <span class="panel-total serif" id="panel-week-total">&#x20B9;0</span>
+            <span class="kicker" id="panel-week-count">0 entries</span>
+          </div>
+          <div class="category-bars" id="week-categories"></div>
+          <div class="chart-wrap chart-wrap-sm"><canvas id="chart-week-daily"></canvas></div>
+          <div class="panel-table-wrap">
+            <table class="ledger compact">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Description</th>
+                  <th>Category</th>
+                  <th class="right">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="week-tbody">
+                <tr><td colspan="4" class="muted center">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-panel" id="panel-month">
+          <div class="panel-header">
+            <span class="panel-total serif" id="panel-month-total">&#x20B9;0</span>
+            <span class="kicker" id="panel-month-count">0 entries</span>
+          </div>
+          <div class="charts-row">
+            <div>
+              <p class="kicker" style="margin-bottom:0.75rem">By category</p>
+              <div class="chart-wrap"><canvas id="chart-category"></canvas></div>
+            </div>
+            <div>
+              <p class="kicker" style="margin-bottom:0.75rem">Daily flow</p>
+              <div class="chart-wrap"><canvas id="chart-daily"></canvas></div>
+            </div>
+          </div>
+          <div class="category-bars" id="month-categories"></div>
+        </div>
+      </section>
+
+      <hr class="hairline" />
+
+      <!-- Add -->
+      <section class="section">
+        <h2>Add an entry</h2>
+        <form id="add-form" class="add-form" autocomplete="off">
+          <label>
+            <span class="kicker">Amount</span>
+            <input id="add-amount" type="number" min="0" step="0.01" required placeholder="0" />
+          </label>
+          <label>
+            <span class="kicker">Category</span>
+            <select id="add-category" required>
+              <option value="" disabled selected>Choose...</option>
+              <option>Food</option>
+              <option>Transport</option>
+              <option>Entertainment</option>
+              <option>College</option>
+              <option>Gym</option>
+              <option>Shopping</option>
+              <option>Health</option>
+              <option>Skincare</option>
+              <option>Miscellaneous</option>
+            </select>
+          </label>
+          <label class="span-2">
+            <span class="kicker">Description</span>
+            <input id="add-description" type="text" placeholder="e.g. dominos late night" />
+          </label>
+          <label>
+            <span class="kicker">Date</span>
+            <input id="add-date" type="date" />
+          </label>
+          <div class="add-actions">
+            <button type="submit" class="link-btn">add entry &rarr;</button>
+          </div>
+        </form>
+      </section>
+
+      <hr class="hairline" />
+
+      <!-- Recent -->
+      <section class="section">
+        <div class="row spread">
+          <h2>Recent</h2>
+          <span class="kicker">Last 20 entries</span>
+        </div>
+        <div class="table-wrap">
+          <table class="ledger">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th>Category</th>
+                <th class="right">Amount</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="expense-tbody">
+              <tr><td colspan="5" class="muted center">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span class="kicker">Logged via Telegram · @rishabhexpensetrackerbot</span>
+      </footer>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
