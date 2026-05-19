@@ -3,38 +3,7 @@
 
 const TelegramBot = require('node-telegram-bot-api');
 const db = require('./database');
-
-// ---------- Category keyword map ----------
-const CATEGORY_KEYWORDS = {
-  Food: ['lunch', 'dinner', 'breakfast', 'food', 'dominos', 'zomato', 'swiggy', 'zepto', 'blinkit', 'chai', 'coffee', 'restaurant', 'biryani', 'pizza', 'snacks'],
-  Transport: ['auto', 'uber', 'ola', 'metro', 'bus', 'rickshaw', 'petrol', 'cab', 'rapido'],
-  Entertainment: ['movie', 'netflix', 'spotify', 'game', 'concert', 'bowling'],
-  College: ['books', 'printing', 'xerox', 'stationery', 'fees', 'lab'],
-  Gym: ['gym', 'protein', 'supplement', 'fitness'],
-  Shopping: ['clothes', 'shoes', 'amazon', 'flipkart', 'mall', 'shirt', 'jeans'],
-  Health: ['medicine', 'pharmacy', 'doctor', 'chemist'],
-  Skincare: ['moisturizer', 'sunscreen', 'facewash', 'skincare', 'serum'],
-};
-
-const CATEGORY_EMOJI = {
-  Food: '🍔',
-  Transport: '🚗',
-  Entertainment: '🎬',
-  College: '🎓',
-  Gym: '💪',
-  Shopping: '🛍️',
-  Health: '💊',
-  Skincare: '✨',
-  Miscellaneous: '📦',
-};
-
-function categorize(text) {
-  const lower = text.toLowerCase();
-  for (const [cat, words] of Object.entries(CATEGORY_KEYWORDS)) {
-    if (words.some((w) => lower.includes(w))) return cat;
-  }
-  return 'Miscellaneous';
-}
+const { CATEGORIES, CATEGORY_KEYWORDS, CATEGORY_EMOJI, categorize } = require('./categories');
 
 function formatRupees(n) {
   return `₹${Number(n).toLocaleString('en-IN')}`;
@@ -57,6 +26,14 @@ function formatTime(dateStr) {
   return `${hh}:${mm} ${ampm}`;
 }
 
+function parsePositiveAmount(value) {
+  const text = String(value || '').trim();
+  if (!/^\d+(?:\.\d+)?$/.test(text)) return null;
+
+  const amount = Number(text);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
 // In-memory conversation state for /add multi-step flow
 const addState = new Map();
 
@@ -66,13 +43,15 @@ function startBot(token, ownerId) {
     return null;
   }
 
+  if (!ownerId || ownerId === 'your_telegram_id_here') {
+    console.warn('[BOT] MY_TELEGRAM_USER_ID not set — bot is disabled to keep expenses private.');
+    return null;
+  }
+
   const bot = new TelegramBot(token, { polling: true });
   console.log('[BOT] Telegram bot started (polling).');
 
-  const allowed = (msg) => {
-    if (!ownerId || ownerId === 'your_telegram_id_here') return true;
-    return String(msg.from.id) === String(ownerId);
-  };
+  const allowed = (msg) => String(msg.from && msg.from.id) === String(ownerId);
 
   const reply = (msg, text, opts = {}) =>
     bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown', ...opts });
@@ -197,8 +176,8 @@ function startBot(token, ownerId) {
   // ---------- /setbudget ----------
   bot.onText(/^\/setbudget(?:\s+(\d+(?:\.\d+)?))?$/, async (msg, match) => {
     if (!allowed(msg)) return;
-    const amt = match[1] ? parseFloat(match[1]) : NaN;
-    if (!amt || amt <= 0) {
+    const amt = match[1] ? parsePositiveAmount(match[1]) : null;
+    if (!amt) {
       return reply(msg, `Usage: \`/setbudget 5000\``);
     }
     try {
@@ -261,11 +240,11 @@ function startBot(token, ownerId) {
     if (state) {
       try {
         if (state.step === 'amount') {
-          const amt = parseFloat(msg.text.trim());
-          if (!amt || amt <= 0) return reply(msg, `Please enter a valid number, e.g. \`150\``);
+          const amt = parsePositiveAmount(msg.text);
+          if (!amt) return reply(msg, `Please enter a valid number, e.g. \`150\``);
           state.amount = amt;
           state.step = 'category';
-          const cats = Object.keys(CATEGORY_KEYWORDS).concat('Miscellaneous');
+          const cats = CATEGORIES;
           return reply(
             msg,
             `Step 2: What category?\n\n${cats.map((c) => `• ${CATEGORY_EMOJI[c] || ''} ${c}`).join('\n')}\n\nJust type the category name.`
@@ -273,7 +252,7 @@ function startBot(token, ownerId) {
         }
         if (state.step === 'category') {
           const input = msg.text.trim();
-          const cats = Object.keys(CATEGORY_KEYWORDS).concat('Miscellaneous');
+          const cats = CATEGORIES;
           const match = cats.find((c) => c.toLowerCase() === input.toLowerCase()) || categorize(input);
           state.category = match;
           state.step = 'description';
@@ -307,7 +286,9 @@ function startBot(token, ownerId) {
     const quick = msg.text.trim().match(/^(\d+(?:\.\d+)?)\s+(.+)$/);
     if (quick) {
       try {
-        const amount = parseFloat(quick[1]);
+        const amount = parsePositiveAmount(quick[1]);
+        if (!amount) return reply(msg, `Please start with a positive amount, e.g. \`150 lunch\``);
+
         const description = quick[2].trim();
         const category = categorize(description);
         const entry = await db.addExpense({

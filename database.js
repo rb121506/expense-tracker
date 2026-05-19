@@ -4,12 +4,27 @@ const { Pool } = require('pg');
 
 let pool;
 
-async function initDB() {
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false },
+function getDatabaseUrl() {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is required. Add it to .env locally or to your deployment environment.');
+  }
+  return process.env.DATABASE_URL;
+}
+
+function createPoolConfig() {
+  const connectionString = getDatabaseUrl();
+  const isLocal = /localhost|127\.0\.0\.1/.test(connectionString);
+  const disablesSsl = /sslmode=disable/i.test(connectionString);
+
+  return {
+    connectionString,
+    ssl: isLocal || disablesSsl ? false : { rejectUnauthorized: false },
     max: 5,
-  });
+  };
+}
+
+async function initDB() {
+  if (!pool) pool = new Pool(createPoolConfig());
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS expenses (
@@ -36,13 +51,7 @@ async function initDB() {
 }
 
 function getPool() {
-  if (!pool) {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      max: 5,
-    });
-  }
+  if (!pool) pool = new Pool(createPoolConfig());
   return pool;
 }
 
@@ -206,6 +215,7 @@ async function setBudget(amount, month) {
 module.exports = {
   initDB,
   getPool,
+  getDatabaseUrl,
   currentMonth,
   todayISO,
   addExpense,

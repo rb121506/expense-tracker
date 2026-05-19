@@ -11,7 +11,7 @@ A personal expense tracker. Log expenses in seconds via a Telegram bot — view 
 - **Auto-categorization** (Food, Transport, Entertainment, College, Gym, Shopping, Health, Skincare, Misc)
 - **Budget tracking** with warnings at 80% and 100%
 - **Web dashboard** with category pie chart and daily bar chart
-- **SQLite storage** — no DB setup needed; data lives in `expenses.db`
+- **Neon Postgres storage** — works locally and on Vercel with one `DATABASE_URL`
 - **Private** — bot responds only to your Telegram user ID
 
 ---
@@ -50,9 +50,10 @@ Edit `.env`:
 TELEGRAM_BOT_TOKEN=123456:ABC-your-token
 MY_TELEGRAM_USER_ID=987654321
 PORT=3000
+DATABASE_URL=postgresql://user:pass@ep-xxx.region.aws.neon.tech/dbname?sslmode=require
 ```
 
-> If you leave `TELEGRAM_BOT_TOKEN` as `your_token_here`, the dashboard still runs but the bot stays disabled.
+> If you leave `TELEGRAM_BOT_TOKEN` or `MY_TELEGRAM_USER_ID` as the placeholder values, the dashboard still runs but the bot stays disabled. This keeps the bot private by default.
 
 ## 5. Run It
 
@@ -111,9 +112,11 @@ Open <http://localhost:3000>. You'll see:
 ```
 expense-tracker/
 ├── server.js          # Express server + bot bootstrap
-├── database.js        # SQLite + query helpers
+├── categories.js      # Shared category definitions
+├── database.js        # Neon Postgres + query helpers
 ├── bot.js             # Telegram bot logic
 ├── routes/api.js      # REST API routes
+├── migrate-sqlite-to-neon.js
 ├── public/
 │   ├── index.html     # Dashboard
 │   ├── style.css      # Dark theme styles
@@ -139,12 +142,22 @@ expense-tracker/
 ## 🔧 Tips
 
 - Default monthly budget is **₹5000** until you set one.
-- Database file `expenses.db` is created next to `server.js` on first run.
-- Delete `expenses.db` to start over.
+- Set `DATABASE_URL` locally and in Vercel before starting the app.
+- The bot starts only when both `TELEGRAM_BOT_TOKEN` and `MY_TELEGRAM_USER_ID` are set.
 - For 24/7 use, run with **pm2**: `pm2 start server.js --name expenses`.
+
+## Migrating Old SQLite Data
+
+If you previously used the SQLite version, keep your old `expenses.db`, set `DATABASE_URL`, then run:
+
+```bash
+node migrate-sqlite-to-neon.js
+```
+
+The migration script uses Node's built-in `node:sqlite` module, so run it with **Node.js 22+**.
 
 ## 🐛 Troubleshooting
 
 - **Bot not responding?** Make sure your `MY_TELEGRAM_USER_ID` matches the account you're messaging from. The bot ignores everyone else.
 - **`polling_error` ETELEGRAM 409**: another instance of the bot is running. Stop it first.
-- **`better-sqlite3` build error on Windows**: install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload).
+- **Database error on startup**: make sure `DATABASE_URL` is set and points to your Neon database.

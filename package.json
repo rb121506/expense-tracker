@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "check": "node --check server.js && node --check database.js && node --check bot.js && node --check routes/api.js && node --check api/index.js && node --check public/app.js && node --check categories.js",
+    "migrate": "node migrate-sqlite-to-neon.js"
   },
   "keywords": [
     "expense",

@@ -2,13 +2,66 @@
 
 const express = require('express');
 const db = require('../database');
+const { CATEGORIES, isKnownCategory } = require('../categories');
 
 const router = express.Router();
+
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const MAX_DESCRIPTION_LENGTH = 240;
+
+function parsePositiveNumber(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function parsePositiveInteger(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function getMonthOrError(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const month = String(value);
+  return MONTH_RE.test(month) ? month : null;
+}
+
+function isValidDateOnly(date) {
+  if (!DATE_RE.test(date)) return false;
+  const [year, month, day] = date.split('-').map(Number);
+  const parsed = new Date(year, month - 1, day);
+  return parsed.getFullYear() === year && parsed.getMonth() === month - 1 && parsed.getDate() === day;
+}
+
+function normalizeExpenseDate(value) {
+  if (!value) return undefined;
+
+  const date = String(value).trim();
+  if (DATE_RE.test(date)) {
+    if (!isValidDateOnly(date)) return null;
+
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    return `${date}T${hh}:${mm}:${ss}`;
+  }
+
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
 
 // GET /api/expenses?month=YYYY-MM
 router.get('/expenses', async (req, res) => {
   try {
-    const { month } = req.query;
+    const month = getMonthOrError(req.query.month, undefined);
+    if (month === null) return res.status(400).json({ error: 'month must be in YYYY-MM format' });
+
     const rows = await db.getExpenses({ month });
     res.json(rows);
   } catch (err) {
@@ -30,7 +83,9 @@ router.get('/expenses/today', async (req, res) => {
 // GET /api/summary?month=YYYY-MM
 router.get('/summary', async (req, res) => {
   try {
-    const month = req.query.month || db.currentMonth();
+    const month = getMonthOrError(req.query.month, db.currentMonth());
+    if (month === null) return res.status(400).json({ error: 'month must be in YYYY-MM format' });
+
     const byCategory = await db.getCategorySummary(month);
     const byDay = await db.getDailySummary(month);
     const total = byCategory.reduce((s, r) => s + r.total, 0);
@@ -79,7 +134,9 @@ router.get('/summary/week', async (_req, res) => {
 // GET /api/budget
 router.get('/budget', async (req, res) => {
   try {
-    const month = req.query.month || db.currentMonth();
+    const month = getMonthOrError(req.query.month, db.currentMonth());
+    if (month === null) return res.status(400).json({ error: 'month must be in YYYY-MM format' });
+
     const budget = await db.getBudget(month);
     const spent = await db.getMonthlyTotal(month);
     res.json({
@@ -99,12 +156,16 @@ router.get('/budget', async (req, res) => {
 router.put('/budget', async (req, res) => {
   try {
     const { amount, month } = req.body || {};
-    const amt = parseFloat(amount);
-    if (!amt || amt <= 0) {
+    const amt = parsePositiveNumber(amount);
+    if (!amt) {
       return res.status(400).json({ error: 'amount must be a positive number' });
     }
-    await db.setBudget(amt, month || db.currentMonth());
-    res.json({ ok: true, amount: amt, month: month || db.currentMonth() });
+
+    const targetMonth = getMonthOrError(month, db.currentMonth());
+    if (targetMonth === null) return res.status(400).json({ error: 'month must be in YYYY-MM format' });
+
+    await db.setBudget(amt, targetMonth);
+    res.json({ ok: true, amount: amt, month: targetMonth });
   } catch (err) {
     console.error('[API] PUT /budget error:', err);
     res.status(500).json({ error: 'Failed to set budget' });
@@ -115,22 +176,27 @@ router.put('/budget', async (req, res) => {
 router.post('/expenses', async (req, res) => {
   try {
     const { amount, category, description, date } = req.body || {};
-    const amt = parseFloat(amount);
-    if (!amt || amt <= 0) return res.status(400).json({ error: 'amount must be a positive number' });
-    if (!category) return res.status(400).json({ error: 'category is required' });
+    const amt = parsePositiveNumber(amount);
+    if (!amt) return res.status(400).json({ error: 'amount must be a positive number' });
 
-    let dateValue = date;
-    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      const now = new Date();
-      const dt = new Date(date);
-      dt.setHours(now.getHours(), now.getMinutes(), now.getSeconds());
-      dateValue = dt.toISOString();
+    const categoryValue = String(category || '').trim();
+    if (!categoryValue) return res.status(400).json({ error: 'category is required' });
+    if (!isKnownCategory(categoryValue)) {
+      return res.status(400).json({ error: `category must be one of: ${CATEGORIES.join(', ')}` });
     }
+
+    const descriptionValue = String(description || '').trim();
+    if (descriptionValue.length > MAX_DESCRIPTION_LENGTH) {
+      return res.status(400).json({ error: `description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer` });
+    }
+
+    const dateValue = normalizeExpenseDate(date);
+    if (dateValue === null) return res.status(400).json({ error: 'date must be a valid date' });
 
     const entry = await db.addExpense({
       amount: amt,
-      category,
-      description: description || '',
+      category: categoryValue,
+      description: descriptionValue,
       date: dateValue,
       telegram_user_id: null,
     });
@@ -144,8 +210,9 @@ router.post('/expenses', async (req, res) => {
 // DELETE /api/expenses/:id
 router.delete('/expenses/:id', async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveInteger(req.params.id);
     if (!id) return res.status(400).json({ error: 'invalid id' });
+
     const ok = await db.deleteExpense(id);
     if (!ok) return res.status(404).json({ error: 'expense not found' });
     res.json({ ok: true, id });

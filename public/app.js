@@ -10,13 +10,20 @@ function formatDateDMY(iso) {
   return `${dd}.${mm}.${String(d.getFullYear()).slice(2)}`;
 }
 
+function localDateISO(date = new Date()) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function formatDayName(iso) {
   const d = new Date(iso + 'T12:00:00');
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = localDateISO(today);
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+  const yesterdayStr = localDateISO(yesterday);
   if (iso === todayStr) return 'Today';
   if (iso === yesterdayStr) return 'Yesterday';
   return d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' });
@@ -200,11 +207,12 @@ function renderCategoryBars(containerId, byCategory) {
     .map((r) => {
       const color = CATEGORY_COLORS[r.category] || '#7b6f5e';
       const pct = maxTotal > 0 ? (r.total / maxTotal) * 100 : 0;
+      const category = escapeHTML(r.category);
       return `
         <div class="cat-row">
           <div class="cat-label">
             <span class="cat-dot" style="background:${color}"></span>
-            ${r.category}
+            ${category}
           </div>
           <div class="cat-bar-track">
             <div class="cat-bar-fill" style="width:${pct}%;background:${color}"></div>
@@ -222,6 +230,10 @@ function escapeHTML(s) {
   );
 }
 
+function categoryDotClass(category) {
+  return Object.prototype.hasOwnProperty.call(CATEGORY_COLORS, category) ? category : 'Miscellaneous';
+}
+
 function renderCompactTable(tbodyId, rows, showDate) {
   const tbody = document.getElementById(tbodyId);
   const cols = showDate ? 4 : 3;
@@ -235,7 +247,7 @@ function renderCompactTable(tbodyId, rows, showDate) {
       <tr>
         ${showDate ? `<td class="date">${formatDateDMY(e.date)}</td>` : ''}
         <td class="description">${escapeHTML(e.description) || '<span class="muted">—</span>'}</td>
-        <td><span class="tag"><span class="tag-dot ${e.category}"></span>${e.category}</span></td>
+        <td><span class="tag"><span class="tag-dot ${categoryDotClass(e.category)}"></span>${escapeHTML(e.category)}</span></td>
         <td class="right amount">${fmtRupees(e.amount)}</td>
       </tr>`)
     .join('');
@@ -257,7 +269,7 @@ function renderTable(rows) {
         <td class="description">${escapeHTML(e.description) || '<span class="muted">—</span>'}</td>
         <td>
           <span class="tag">
-            <span class="tag-dot ${e.category}"></span>${e.category}
+            <span class="tag-dot ${categoryDotClass(e.category)}"></span>${escapeHTML(e.category)}
           </span>
         </td>
         <td class="right amount">${fmtRupees(e.amount)}</td>
