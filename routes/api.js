@@ -653,8 +653,8 @@ Respond with ONLY valid JSON (no markdown fences): {"sql": "SELECT ...", "explan
 If not answerable with SQL: {"sql": null, "explanation": "reason"}`;
 }
 
-async function callGemini(question) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GEMINI_KEY}`;
+async function callGemini(question, apiKey) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -733,14 +733,15 @@ router.post('/ask', async (req, res) => {
 
     let geminiResult;
     try {
-      if (!GEMINI_KEY) throw new Error('No API key configured');
-      geminiResult = await callGemini(question.trim());
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) throw new Error('No API key configured in Vercel. Please check your Environment Variables.');
+      geminiResult = await callGemini(question.trim(), apiKey);
     } catch (err) {
       console.error('[API] Gemini error:', err.message);
       geminiResult = tryFallback(question.trim());
       if (!geminiResult) {
         return res.json({
-          answer: "I couldn't process that right now. Try asking about totals, categories, or budgets.",
+          answer: `I encountered an error: ${err.message}. If this says "API key not valid", you may have pasted a typo in Vercel!`,
           sql: null,
           data: null,
         });
