@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..700,0..100&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/style.css?v=2" />
+    <link rel="stylesheet" href="/style.css?v=3" />
   </head>
   <body>
 
@@ -509,11 +509,35 @@
       </div>
     </div>
 
+    <!-- AI Chat Widget -->
+    <div id="chat-widget" class="chat-widget">
+      <button id="chat-toggle" class="chat-toggle" aria-label="Ask AI">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+        </svg>
+      </button>
+      <div id="chat-panel" class="chat-panel hidden">
+        <div class="chat-header">
+          <span class="chat-title">Ask about your expenses</span>
+          <button id="chat-close" class="chat-close">&times;</button>
+        </div>
+        <div id="chat-messages" class="chat-messages">
+          <div class="chat-msg chat-ai">
+            <div class="chat-bubble">Hi! Ask me anything about your spending.<br><span class="muted" style="font-size:0.78rem">e.g. "How much did I spend on food?" or "What's my biggest expense?"</span></div>
+          </div>
+        </div>
+        <form id="chat-form" class="chat-input-wrap" autocomplete="off">
+          <input id="chat-input" type="text" placeholder="Ask a question..." maxlength="500" />
+          <button type="submit" class="chat-send" aria-label="Send">&rarr;</button>
+        </form>
+      </div>
+    </div>
+
     <div id="toast" class="toast hidden"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
-    <script src="/app.js?v=2"></script>
+    <script src="/app.js?v=3"></script>
   </body>
 </html>

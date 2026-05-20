@@ -582,6 +582,218 @@ router.get('/report-data', async (req, res) => {
   }
 });
 
+// --------- AI Chat route ---------
+
+const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+
+// Rate limiter: 20 requests/hour per IP
+const rateLimitMap = new Map();
+const RATE_LIMIT = 20;
+const RATE_WINDOW = 60 * 60 * 1000;
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now - entry.windowStart > RATE_WINDOW) {
+    rateLimitMap.set(ip, { windowStart: now, count: 1 });
+    return true;
+  }
+  if (entry.count >= RATE_LIMIT) return false;
+  entry.count++;
+  return true;
+}
+
+// Cleanup stale rate limit entries every 10 min
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap) {
+    if (now - entry.windowStart > RATE_WINDOW) rateLimitMap.delete(ip);
+  }
+}, 10 * 60 * 1000);
+
+const DANGEROUS_SQL = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|EXEC|EXECUTE|INTO\s+OUTFILE|LOAD_FILE|COPY|pg_sleep|pg_read|information_schema)\b/i;
+
+function validateSQL(sql) {
+  if (!sql || typeof sql !== 'string') return false;
+  const trimmed = sql.trim();
+  if (!trimmed.toUpperCase().startsWith('SELECT')) return false;
+  if (DANGEROUS_SQL.test(trimmed)) return false;
+  if (trimmed.includes(';')) return false;
+  return true;
+}
+
+function buildSystemPrompt() {
+  const today = new Date();
+  const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const curMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+
+  return `You are a SQL assistant for a personal expense tracker. Generate PostgreSQL SELECT queries.
+
+Schema:
+- expenses (id SERIAL, amount NUMERIC, category TEXT, description TEXT, date TEXT, month TEXT)
+  date: ISO string "2026-05-18T22:20:01.000Z", month: "YYYY-MM"
+  categories: ${CATEGORIES.join(', ')}
+- budgets (id SERIAL, monthly_budget NUMERIC, month TEXT UNIQUE)
+- category_budgets (id SERIAL, category TEXT, budget NUMERIC, month TEXT)
+
+Today: ${todayISO}
+Current month: ${curMonth}
+
+Rules:
+1. ONLY generate SELECT queries. Never modify data.
+2. Filter by month column: WHERE month = 'YYYY-MM'
+3. Filter by date: substring(date, 1, 10) for comparisons
+4. Add LIMIT 50 for row queries (not for aggregates).
+5. Default to current month if user doesn't specify a time period.
+6. Use SUM(amount), COUNT(*), AVG(amount) for totals/averages.
+7. For "this week", use substring(date, 1, 10) >= '${todayISO.slice(0, 8)}${String(today.getDate() - today.getDay()).padStart(2, '0')}'
+8. For "today", use substring(date, 1, 10) = '${todayISO}'
+
+Respond with ONLY valid JSON (no markdown fences): {"sql": "SELECT ...", "explanation": "brief answer description"}
+If not answerable with SQL: {"sql": null, "explanation": "reason"}`;
+}
+
+async function callGemini(question) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GEMINI_KEY}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: buildSystemPrompt() }] },
+      contents: [{ parts: [{ text: question }] }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 500,
+        responseMimeType: 'application/json',
+      },
+    }),
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    throw new Error(`Gemini ${res.status}: ${errBody.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Empty Gemini response');
+  return JSON.parse(text);
+}
+
+function tryFallback(question) {
+  const q = question.toLowerCase();
+  const curMonth = db.currentMonth();
+  const today = db.todayISO();
+  if (q.includes('today') && (q.includes('spend') || q.includes('total') || q.includes('how much'))) {
+    return { sql: `SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE substring(date, 1, 10) = '${today}'`, explanation: "Today's total spending" };
+  }
+  if ((q.includes('month') || q.includes('total')) && (q.includes('spend') || q.includes('how much'))) {
+    return { sql: `SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE month = '${curMonth}'`, explanation: "This month's total spending" };
+  }
+  if (q.includes('budget')) {
+    return { sql: `SELECT monthly_budget AS budget FROM budgets WHERE month = '${curMonth}'`, explanation: "Current monthly budget" };
+  }
+  if (q.includes('categor')) {
+    return { sql: `SELECT category, SUM(amount) AS total, COUNT(*) AS count FROM expenses WHERE month = '${curMonth}' GROUP BY category ORDER BY total DESC`, explanation: "Category breakdown this month" };
+  }
+  if (q.includes('most expensive') || q.includes('highest') || q.includes('biggest')) {
+    return { sql: `SELECT description, amount, category, substring(date, 1, 10) AS date FROM expenses WHERE month = '${curMonth}' ORDER BY amount DESC LIMIT 5`, explanation: "Top 5 most expensive items this month" };
+  }
+  return null;
+}
+
+function formatAnswer(explanation, rows) {
+  if (!rows || rows.length === 0) return 'No expenses found matching that query.';
+
+  if (rows.length === 1 && Object.keys(rows[0]).length <= 3) {
+    const parts = Object.entries(rows[0]).map(([k, v]) => {
+      const num = Number(v);
+      if (!isNaN(num) && (k.includes('total') || k.includes('amount') || k.includes('avg') || k.includes('sum') || k.includes('budget') || k.includes('spent'))) {
+        return `₹${num.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+      }
+      return String(v);
+    });
+    return `${explanation}: ${parts.join(' · ')}`;
+  }
+  return `${explanation} (${rows.length} result${rows.length !== 1 ? 's' : ''})`;
+}
+
+router.post('/ask', async (req, res) => {
+  try {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+    if (!checkRateLimit(ip)) {
+      return res.status(429).json({ answer: 'Rate limit reached (20/hour). Try again later.', sql: null, data: null });
+    }
+
+    const { question } = req.body || {};
+    if (!question || typeof question !== 'string' || question.trim().length < 3) {
+      return res.status(400).json({ answer: 'Please ask a question about your expenses.', sql: null, data: null });
+    }
+    if (question.length > 500) {
+      return res.status(400).json({ answer: 'Question too long (max 500 characters).', sql: null, data: null });
+    }
+
+    let geminiResult;
+    try {
+      if (!GEMINI_KEY) throw new Error('No API key configured');
+      geminiResult = await callGemini(question.trim());
+    } catch (err) {
+      console.error('[API] Gemini error:', err.message);
+      geminiResult = tryFallback(question.trim());
+      if (!geminiResult) {
+        return res.json({
+          answer: "I couldn't process that right now. Try asking about totals, categories, or budgets.",
+          sql: null,
+          data: null,
+        });
+      }
+    }
+
+    if (!geminiResult.sql) {
+      return res.json({
+        answer: geminiResult.explanation || "I can only answer questions about your expenses.",
+        sql: null,
+        data: null,
+      });
+    }
+
+    if (!validateSQL(geminiResult.sql)) {
+      console.warn('[API] SQL rejected:', geminiResult.sql);
+      return res.json({
+        answer: "I couldn't understand that. Try rephrasing your question.",
+        sql: null,
+        data: null,
+      });
+    }
+
+    // Execute with 5s timeout
+    const pool = db.getPool();
+    const result = await Promise.race([
+      pool.query(geminiResult.sql),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+    ]);
+
+    const rows = (result.rows || []).map(r => {
+      const row = {};
+      for (const [k, v] of Object.entries(r)) {
+        row[k] = typeof v === 'string' && /^\d+(\.\d+)?$/.test(v) ? Number(v) : v;
+      }
+      return row;
+    });
+
+    res.json({
+      answer: formatAnswer(geminiResult.explanation, rows),
+      sql: geminiResult.sql,
+      data: rows.length <= 50 ? rows : rows.slice(0, 50),
+    });
+  } catch (err) {
+    console.error('[API] POST /ask error:', err);
+    res.json({
+      answer: "Something went wrong. Try rephrasing your question.",
+      sql: null,
+      data: null,
+    });
+  }
+});
+
 // --------- Recurring expense routes ---------
 
 // GET /api/recurring
