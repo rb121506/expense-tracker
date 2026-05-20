@@ -343,10 +343,12 @@ h2 {
   margin-bottom: 1.5rem;
 }
 .cat-row {
-  display: grid;
-  grid-template-columns: max-content 1fr auto;
+  display: flex;
   align-items: center;
   gap: 0.75rem;
+}
+.cat-row .cat-bar-track {
+  flex: 1;
 }
 .cat-label {
   display: flex;
@@ -358,6 +360,8 @@ h2 {
   letter-spacing: 0.14em;
   color: var(--ink-2);
   white-space: nowrap;
+  min-width: 155px;
+  flex-shrink: 0;
 }
 .cat-dot {
   width: 7px;
@@ -737,7 +741,7 @@ code {
   .ledger .date { font-size: 0.75rem; }
   .quick-totals { gap: 1.5rem; }
   .quick-total-num { font-size: 1.4rem; }
-  .cat-row { grid-template-columns: max-content 1fr auto; }
+  .cat-label { min-width: 120px; }
   .row.spread { flex-wrap: wrap; gap: 0.75rem; }
   .insights-grid { grid-template-columns: repeat(2, 1fr); }
   .catbudget-row { grid-template-columns: 90px 1fr auto auto; font-size: 0.85rem; }
