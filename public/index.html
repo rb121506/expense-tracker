@@ -84,9 +84,23 @@
 
       <hr class="hairline" />
 
+      <!-- Alerts -->
+      <section class="section" id="alerts-section">
+        <div class="row spread">
+          <h2>Alerts</h2>
+          <span class="kicker" id="alerts-count"></span>
+        </div>
+        <div id="alerts-list" class="alerts-list"></div>
+      </section>
+
+      <hr class="hairline" />
+
       <!-- Insights -->
       <section class="section" id="insights-section">
-        <h2>Insights</h2>
+        <div class="row spread">
+          <h2>Insights</h2>
+          <button id="generate-report" class="link-btn">generate report &darr;</button>
+        </div>
         <div class="insights-grid" id="insights-grid">
           <div class="insight-card">
             <span class="kicker">Avg daily</span>
@@ -498,6 +512,8 @@
     <div id="toast" class="toast hidden"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

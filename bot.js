@@ -81,12 +81,15 @@ function startBot(token, ownerId) {
         `/add — add an expense step-by-step\n` +
         `/summary — week & month totals\n` +
         `/today — today's expenses\n` +
+        `/digest — daily spending digest\n` +
+        `/alerts — smart spending alerts\n` +
         `/categories — spending by category\n` +
         `/budget — monthly budget usage\n` +
         `/setbudget [amount] — set monthly budget\n` +
         `/history — last 10 expenses\n` +
         `/delete [id] — delete an expense\n` +
         `/help — this menu\n\n` +
+        `🔔 _Auto digest sent daily at 9 PM_\n\n` +
         `💡 *Quick log:* just send \`amount description\`\n` +
         `e.g. \`80 chai\``
     );
@@ -188,6 +191,146 @@ function startBot(token, ownerId) {
       reply(msg, `❌ Error setting budget`);
     }
   });
+
+  // ---------- /digest ----------
+  bot.onText(/^\/digest$/, async (msg) => {
+    if (!allowed(msg)) return;
+    try {
+      const todayTotal = await db.getTodayTotal();
+      const weekTotal = await db.getWeeklyTotal();
+      const monthTotal = await db.getMonthlyTotal();
+      const budget = await db.getBudget();
+      const remaining = budget - monthTotal;
+      const pct = budget ? ((monthTotal / budget) * 100).toFixed(0) : 0;
+
+      const todayItems = await db.getTodayExpenses();
+      const topToday = todayItems.slice(0, 3).map(e =>
+        `  • ${formatRupees(e.amount)} — ${e.description || e.category}`
+      ).join('\n');
+
+      reply(
+        msg,
+        `📋 *Daily Digest*\n\n` +
+          `💰 Today: *${formatRupees(todayTotal)}*${todayItems.length ? '\n' + topToday : ''}\n\n` +
+          `📅 This week: *${formatRupees(weekTotal)}*\n` +
+          `🗓️ This month: *${formatRupees(monthTotal)}* (${pct}% of budget)\n` +
+          `${remaining >= 0 ? `✅ Remaining: *${formatRupees(remaining)}*` : `🚨 Over budget by *${formatRupees(-remaining)}*`}`
+      );
+    } catch (err) {
+      console.error('[BOT] /digest error:', err);
+      reply(msg, `❌ Error generating digest`);
+    }
+  });
+
+  // ---------- /alerts ----------
+  bot.onText(/^\/alerts$/, async (msg) => {
+    if (!allowed(msg)) return;
+    try {
+      const messages = [];
+
+      // Budget alert
+      const budget = await db.getBudget();
+      const monthTotal = await db.getMonthlyTotal();
+      const pct = budget ? (monthTotal / budget) * 100 : 0;
+      if (pct >= 100) {
+        messages.push(`🚨 *Over budget!* ${formatRupees(monthTotal)} of ${formatRupees(budget)} spent (${pct.toFixed(0)}%)`);
+      } else if (pct >= 80) {
+        messages.push(`⚠️ *Budget warning:* ${pct.toFixed(0)}% used — ${formatRupees(budget - monthTotal)} left`);
+      }
+
+      // Unusual spending
+      const thisWeek = await db.getThisWeekByCategory();
+      const avgWeek = await db.getWeeklyAvgByCategory(4);
+      for (const tw of thisWeek) {
+        const avg = avgWeek.find(a => a.category === tw.category);
+        if (avg && avg.weeklyAvg > 0) {
+          const ratio = tw.total / avg.weeklyAvg;
+          if (ratio >= 1.5 && tw.total > 100) {
+            messages.push(
+              `📈 *${tw.category}:* ${formatRupees(tw.total)} this week — ` +
+              `${ratio.toFixed(1)}× your avg (${formatRupees(Math.round(avg.weeklyAvg))})`
+            );
+          }
+        }
+      }
+
+      // Upcoming recurring
+      const upcoming = await db.getUpcomingRecurring(3);
+      for (const r of upcoming) {
+        if (r.dueIn === 0) {
+          messages.push(`🔔 *${r.description || r.category}* of ${formatRupees(r.amount)} is *due today*`);
+        } else {
+          messages.push(`📌 *${r.description || r.category}* of ${formatRupees(r.amount)} due in *${r.dueIn} day${r.dueIn > 1 ? 's' : ''}*`);
+        }
+      }
+
+      if (messages.length === 0) {
+        reply(msg, `✅ *No alerts* — everything looks good! 🎉`);
+      } else {
+        reply(msg, `🔔 *Smart Alerts*\n\n${messages.join('\n\n')}`);
+      }
+    } catch (err) {
+      console.error('[BOT] /alerts error:', err);
+      reply(msg, `❌ Error checking alerts`);
+    }
+  });
+
+  // ---------- Auto-notifications ----------
+  let lastAlertDate = '';
+
+  function startAutoNotifications() {
+    // Check every hour for alerts to send
+    setInterval(async () => {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const hour = new Date().getHours();
+
+        // Send daily digest at ~9 PM (21:00) IST once per day
+        if (hour === 21 && lastAlertDate !== today) {
+          lastAlertDate = today;
+
+          const todayTotal = await db.getTodayTotal();
+          const budget = await db.getBudget();
+          const monthTotal = await db.getMonthlyTotal();
+          const remaining = budget - monthTotal;
+
+          const parts = [`📋 *Evening Digest*\n`, `Today: *${formatRupees(todayTotal)}*`];
+
+          // Unusual spending check
+          const thisWeek = await db.getThisWeekByCategory();
+          const avgWeek = await db.getWeeklyAvgByCategory(4);
+          const unusual = [];
+          for (const tw of thisWeek) {
+            const avg = avgWeek.find(a => a.category === tw.category);
+            if (avg && avg.weeklyAvg > 0 && tw.total / avg.weeklyAvg >= 2 && tw.total > 200) {
+              unusual.push(`📈 ${tw.category}: ${formatRupees(tw.total)} this week (${(tw.total / avg.weeklyAvg).toFixed(1)}× avg)`);
+            }
+          }
+          if (unusual.length) parts.push('\n' + unusual.join('\n'));
+
+          // Recurring reminders for tomorrow
+          const tomorrow = await db.getUpcomingRecurring(1);
+          const tmrw = tomorrow.filter(r => r.dueIn === 1);
+          if (tmrw.length) {
+            parts.push('\n🔔 *Due tomorrow:*');
+            tmrw.forEach(r => parts.push(`  • ${r.description || r.category} — ${formatRupees(r.amount)}`));
+          }
+
+          parts.push(`\nMonth: ${formatRupees(monthTotal)} / ${formatRupees(budget)} (${remaining >= 0 ? formatRupees(remaining) + ' left' : formatRupees(-remaining) + ' over'})`);
+
+          bot.sendMessage(ownerId, parts.join('\n'), { parse_mode: 'Markdown' }).catch(err => {
+            console.error('[BOT] Auto-digest send error:', err.message);
+          });
+        }
+      } catch (err) {
+        console.error('[BOT] Auto-notification error:', err.message);
+      }
+    }, 60 * 60 * 1000); // Check every hour
+
+    console.log('[BOT] Auto-notifications enabled (daily digest at 9 PM)');
+  }
+
+  startAutoNotifications();
 
   // ---------- /history ----------
   bot.onText(/^\/history$/, async (msg) => {

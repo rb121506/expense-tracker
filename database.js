@@ -370,6 +370,86 @@ async function getInsights(month) {
   };
 }
 
+// ---------- Alert & Report queries ----------
+
+async function getThisWeekByCategory() {
+  const from = weekAgoISO();
+  const rows = await query(
+    `SELECT category, COALESCE(SUM(amount), 0) AS total
+     FROM expenses WHERE substring(date, 1, 10) >= $1
+     GROUP BY category ORDER BY total DESC`,
+    [from]
+  );
+  return rows.map(r => ({ category: r.category, total: Number(r.total) }));
+}
+
+async function getWeeklyAvgByCategory(weeksBack = 4) {
+  const now = new Date();
+  const from = new Date(now);
+  from.setDate(now.getDate() - (weeksBack * 7));
+  const fromISO = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-${String(from.getDate()).padStart(2, '0')}`;
+
+  const rows = await query(
+    `SELECT category, COALESCE(SUM(amount), 0) AS total
+     FROM expenses WHERE substring(date, 1, 10) >= $1
+     GROUP BY category ORDER BY total DESC`,
+    [fromISO]
+  );
+  return rows.map(r => ({
+    category: r.category,
+    weeklyAvg: Number(r.total) / weeksBack,
+    total: Number(r.total),
+  }));
+}
+
+async function getTopMerchants(month, limit = 5) {
+  month = month || currentMonth();
+  const rows = await query(
+    `SELECT description, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+     FROM expenses WHERE month = $1 AND COALESCE(description, '') != ''
+     GROUP BY description ORDER BY total DESC LIMIT $2`,
+    [month, limit]
+  );
+  return rows.map(r => ({ description: r.description, total: Number(r.total), count: Number(r.count) }));
+}
+
+async function getMonthlyTrend(monthsBack = 6) {
+  const months = [];
+  const now = new Date();
+  for (let i = monthsBack - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }
+
+  const rows = await query(
+    `SELECT month, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+     FROM expenses WHERE month = ANY($1)
+     GROUP BY month ORDER BY month ASC`,
+    [months]
+  );
+  return months.map(m => {
+    const r = rows.find(row => row.month === m);
+    return { month: m, total: r ? Number(r.total) : 0, count: r ? Number(r.count) : 0 };
+  });
+}
+
+async function getUpcomingRecurring(daysAhead = 3) {
+  const today = new Date();
+  const dayOfMonth = today.getDate();
+  const upcoming = [];
+  for (let d = 0; d <= daysAhead; d++) {
+    upcoming.push(dayOfMonth + d);
+  }
+  const rows = await query(
+    `SELECT * FROM recurring_expenses WHERE active = true AND day_of_month = ANY($1) ORDER BY day_of_month`,
+    [upcoming]
+  );
+  return rows.map(r => ({
+    ...castRecurring(r),
+    dueIn: Number(r.day_of_month) - dayOfMonth,
+  }));
+}
+
 // ---------- Import (bulk insert) ----------
 async function bulkAddExpenses(entries) {
   const client = await getPool().connect();
@@ -429,4 +509,9 @@ module.exports = {
   deleteRecurringExpense,
   getInsights,
   bulkAddExpenses,
+  getThisWeekByCategory,
+  getWeeklyAvgByCategory,
+  getTopMerchants,
+  getMonthlyTrend,
+  getUpcomingRecurring,
 };

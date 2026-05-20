@@ -474,6 +474,114 @@ router.delete('/category-budgets/:category', async (req, res) => {
   }
 });
 
+// --------- Alerts route ---------
+
+router.get('/alerts', async (req, res) => {
+  try {
+    const month = getMonthOrError(req.query.month, db.currentMonth());
+    if (month === null) return res.status(400).json({ error: 'month must be in YYYY-MM format' });
+
+    const [todayTotal, weekTotal, monthTotal, budget, thisWeek, avgWeek, upcoming] = await Promise.all([
+      db.getTodayTotal(),
+      db.getWeeklyTotal(),
+      db.getMonthlyTotal(month),
+      db.getBudget(month),
+      db.getThisWeekByCategory(),
+      db.getWeeklyAvgByCategory(4),
+      db.getUpcomingRecurring(3),
+    ]);
+
+    // Daily digest
+    const dailyDigest = {
+      todaySpent: todayTotal,
+      weekSpent: weekTotal,
+      monthSpent: monthTotal,
+      budget,
+      monthRemaining: budget - monthTotal,
+      budgetPercent: budget ? Math.round((monthTotal / budget) * 100) : 0,
+    };
+
+    // Unusual spending: current week vs 4-week average
+    const unusualSpending = [];
+    for (const tw of thisWeek) {
+      const avg = avgWeek.find(a => a.category === tw.category);
+      if (avg && avg.weeklyAvg > 0) {
+        const ratio = tw.total / avg.weeklyAvg;
+        if (ratio >= 1.5 && tw.total > 100) {
+          unusualSpending.push({
+            category: tw.category,
+            thisWeek: Math.round(tw.total),
+            weeklyAvg: Math.round(avg.weeklyAvg),
+            ratio: Math.round(ratio * 10) / 10,
+          });
+        }
+      }
+    }
+
+    // Recurring reminders
+    const recurringReminders = upcoming.map(r => ({
+      description: r.description || r.category,
+      amount: r.amount,
+      dueIn: r.dueIn,
+      dayOfMonth: r.day_of_month,
+    }));
+
+    res.json({ dailyDigest, unusualSpending, recurringReminders });
+  } catch (err) {
+    console.error('[API] GET /alerts error:', err);
+    res.status(500).json({ error: 'Failed to get alerts' });
+  }
+});
+
+// --------- Report data route ---------
+
+router.get('/report-data', async (req, res) => {
+  try {
+    const month = getMonthOrError(req.query.month, db.currentMonth());
+    if (month === null) return res.status(400).json({ error: 'month must be in YYYY-MM format' });
+
+    const [summary, budget, byDay, topMerchants, trend, catBudgets, insights] = await Promise.all([
+      db.getCategorySummary(month),
+      db.getBudget(month),
+      db.getDailySummary(month),
+      db.getTopMerchants(month, 5),
+      db.getMonthlyTrend(6),
+      db.getCategoryBudgets(month),
+      db.getInsights(month),
+    ]);
+
+    const total = summary.reduce((s, r) => s + r.total, 0);
+    const count = summary.reduce((s, r) => s + r.count, 0);
+
+    // Merge spent into category budgets
+    const catBudgetsMerged = catBudgets.map(b => {
+      const spent = summary.find(s => s.category === b.category);
+      return {
+        category: b.category,
+        budget: b.budget,
+        spent: spent ? spent.total : 0,
+      };
+    });
+
+    res.json({
+      month,
+      total,
+      count,
+      budget,
+      remaining: budget - total,
+      byCategory: summary,
+      byDay,
+      topMerchants,
+      trend,
+      categoryBudgets: catBudgetsMerged,
+      insights,
+    });
+  } catch (err) {
+    console.error('[API] GET /report-data error:', err);
+    res.status(500).json({ error: 'Failed to generate report data' });
+  }
+});
+
 // --------- Recurring expense routes ---------
 
 // GET /api/recurring

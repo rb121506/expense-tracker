@@ -426,6 +426,63 @@ function renderInsights(data) {
   }
 }
 
+// ---------- Alerts ----------
+function renderAlerts(data) {
+  const container = document.getElementById('alerts-list');
+  const countEl = document.getElementById('alerts-count');
+  const items = [];
+
+  // Budget alerts
+  const d = data.dailyDigest;
+  if (d.budgetPercent >= 100) {
+    items.push({ type: 'danger', icon: '🚨', text: `<strong>Over budget!</strong> ${fmtRupees(d.monthSpent)} of ${fmtRupees(d.budget)} spent (${d.budgetPercent}%)` });
+  } else if (d.budgetPercent >= 80) {
+    items.push({ type: 'warn', icon: '⚠️', text: `<strong>Budget warning:</strong> ${d.budgetPercent}% used — ${fmtRupees(d.monthRemaining)} remaining` });
+  }
+
+  // Unusual spending
+  for (const u of data.unusualSpending) {
+    items.push({
+      type: 'info',
+      icon: '📈',
+      text: `<strong>${escapeHTML(u.category)}:</strong> ${fmtRupees(u.thisWeek)} this week — ${u.ratio}× your weekly avg (${fmtRupees(u.weeklyAvg)})`,
+    });
+  }
+
+  // Recurring reminders
+  for (const r of data.recurringReminders) {
+    const when = r.dueIn === 0 ? 'due <strong>today</strong>' : `due in <strong>${r.dueIn} day${r.dueIn > 1 ? 's' : ''}</strong>`;
+    items.push({
+      type: 'remind',
+      icon: '🔔',
+      text: `<strong>${escapeHTML(r.description)}</strong> of ${fmtRupees(r.amount)} ${when}`,
+    });
+  }
+
+  // Daily summary (always show)
+  if (d.todaySpent > 0) {
+    items.push({
+      type: '',
+      icon: '💰',
+      text: `Today: ${fmtRupees(d.todaySpent)} · Week: ${fmtRupees(d.weekSpent)} · Month: ${fmtRupees(d.monthSpent)}`,
+    });
+  }
+
+  countEl.textContent = items.length ? `${items.length} alert${items.length > 1 ? 's' : ''}` : '';
+
+  if (!items.length) {
+    container.innerHTML = '<p class="alerts-empty">All clear — no alerts right now.</p>';
+    return;
+  }
+
+  container.innerHTML = items.map(a =>
+    `<div class="alert-item alert-${a.type}">
+      <span class="alert-icon">${a.icon}</span>
+      <span class="alert-text">${a.text}</span>
+    </div>`
+  ).join('');
+}
+
 // ---------- Category Budgets ----------
 function renderCategoryBudgets(budgets) {
   const container = document.getElementById('catbudget-list');
@@ -542,6 +599,7 @@ async function refreshAll() {
       api(`/insights?month=${selectedMonth}`),
       api(`/category-budgets?month=${selectedMonth}`),
       api('/recurring'),
+      api(`/alerts?month=${selectedMonth}`),
     ];
 
     if (isNow) {
@@ -550,7 +608,7 @@ async function refreshAll() {
     }
 
     const results = await Promise.all(promises);
-    const [summary, budget, expenses, insights, catBudgets, recurring, todayData, weekData] = results;
+    const [summary, budget, expenses, insights, catBudgets, recurring, alerts, todayData, weekData] = results;
 
     // Hero
     document.getElementById('stat-count').textContent = summary.count;
@@ -587,6 +645,9 @@ async function refreshAll() {
       dailyChart = renderBarChart('chart-daily', summary.byDay, dailyChart);
     }
     renderCategoryBars('month-categories', summary.byCategory);
+
+    // Alerts
+    renderAlerts(alerts);
 
     // Insights
     renderInsights(insights);
@@ -972,6 +1033,203 @@ document.getElementById('import-cancel').addEventListener('click', () => {
   document.getElementById('import-file').value = '';
   pendingImportEntries = [];
 });
+
+// ---------- PDF Report Generation ----------
+document.getElementById('generate-report').addEventListener('click', async () => {
+  try {
+    toast('Generating report...');
+    const data = await api(`/report-data?month=${selectedMonth}`);
+    generatePDF(data);
+  } catch (err) {
+    toast(`Report failed — ${err.message}`, 'error');
+  }
+});
+
+function generatePDF(data) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  const INK = [30, 26, 20];
+  const ACCENT_RGB = [169, 74, 38];
+  const MUTED = [139, 132, 114];
+  const pageW = doc.internal.pageSize.getWidth();
+
+  // --- Header ---
+  const [y0, m0] = data.month.split('-').map(Number);
+  const monthName = new Date(y0, m0 - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(22);
+  doc.setTextColor(...INK);
+  doc.text('Expense Report', 14, 22);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(11);
+  doc.setTextColor(...MUTED);
+  doc.text(monthName, 14, 30);
+
+  doc.setDrawColor(...ACCENT_RGB);
+  doc.setLineWidth(0.5);
+  doc.line(14, 34, pageW - 14, 34);
+
+  // --- Summary Box ---
+  let y = 44;
+  doc.setFontSize(10);
+  doc.setTextColor(...MUTED);
+  doc.text('SUMMARY', 14, y);
+  y += 8;
+
+  doc.setFontSize(12);
+  doc.setTextColor(...INK);
+  const budgetPct = data.budget ? Math.round((data.total / data.budget) * 100) : 0;
+  const summaryRows = [
+    ['Total Spent', fmtRupees(data.total)],
+    ['Budget', fmtRupees(data.budget)],
+    ['Remaining', fmtRupees(data.remaining)],
+    ['Budget Used', `${budgetPct}%`],
+    ['Entries', String(data.count)],
+    ['Avg Daily', fmtRupees(data.insights.avgDaily)],
+    ['Projected', fmtRupees(data.insights.projected)],
+  ];
+
+  doc.autoTable({
+    startY: y,
+    head: [],
+    body: summaryRows,
+    theme: 'plain',
+    styles: { fontSize: 10, cellPadding: 2, textColor: INK },
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 40 },
+      1: { halign: 'left' },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  y = doc.lastAutoTable.finalY + 12;
+
+  // --- Category Breakdown ---
+  doc.setFontSize(10);
+  doc.setTextColor(...MUTED);
+  doc.text('CATEGORY BREAKDOWN', 14, y);
+  y += 4;
+
+  const catRows = data.byCategory.map(c => {
+    const pct = data.total ? ((c.total / data.total) * 100).toFixed(1) : '0';
+    return [c.category, fmtRupees(c.total), `${pct}%`, String(c.count)];
+  });
+
+  doc.autoTable({
+    startY: y,
+    head: [['Category', 'Amount', '%', 'Entries']],
+    body: catRows,
+    theme: 'striped',
+    headStyles: { fillColor: ACCENT_RGB, textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
+    styles: { fontSize: 9, cellPadding: 3, textColor: INK },
+    columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } },
+    margin: { left: 14, right: 14 },
+  });
+
+  y = doc.lastAutoTable.finalY + 12;
+
+  // --- Top 5 Merchants ---
+  if (data.topMerchants.length) {
+    doc.setFontSize(10);
+    doc.setTextColor(...MUTED);
+    doc.text('TOP MERCHANTS', 14, y);
+    y += 4;
+
+    const merchRows = data.topMerchants.map((m, i) => [
+      `${i + 1}`, m.description, fmtRupees(m.total), `${m.count}×`,
+    ]);
+
+    doc.autoTable({
+      startY: y,
+      head: [['#', 'Merchant', 'Total', 'Txns']],
+      body: merchRows,
+      theme: 'striped',
+      headStyles: { fillColor: ACCENT_RGB, textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
+      styles: { fontSize: 9, cellPadding: 3, textColor: INK },
+      columnStyles: { 0: { cellWidth: 10 }, 2: { halign: 'right' }, 3: { halign: 'right' } },
+      margin: { left: 14, right: 14 },
+    });
+
+    y = doc.lastAutoTable.finalY + 12;
+  }
+
+  // --- Month-over-Month Trend ---
+  if (data.trend.length) {
+    // Check if we need a new page
+    if (y > 240) { doc.addPage(); y = 20; }
+
+    doc.setFontSize(10);
+    doc.setTextColor(...MUTED);
+    doc.text('MONTH-OVER-MONTH TREND', 14, y);
+    y += 4;
+
+    const trendRows = data.trend.map(t => {
+      const [ty, tm] = t.month.split('-').map(Number);
+      const label = new Date(ty, tm - 1, 1).toLocaleString('en-US', { month: 'short', year: 'numeric' });
+      return [label, fmtRupees(t.total), String(t.count)];
+    });
+
+    doc.autoTable({
+      startY: y,
+      head: [['Month', 'Total', 'Entries']],
+      body: trendRows,
+      theme: 'striped',
+      headStyles: { fillColor: ACCENT_RGB, textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
+      styles: { fontSize: 9, cellPadding: 3, textColor: INK },
+      columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
+      margin: { left: 14, right: 14 },
+    });
+
+    y = doc.lastAutoTable.finalY + 12;
+  }
+
+  // --- Category Budgets ---
+  if (data.categoryBudgets && data.categoryBudgets.length) {
+    if (y > 240) { doc.addPage(); y = 20; }
+
+    doc.setFontSize(10);
+    doc.setTextColor(...MUTED);
+    doc.text('CATEGORY BUDGETS', 14, y);
+    y += 4;
+
+    const cbRows = data.categoryBudgets.map(b => {
+      const pct = b.budget ? Math.round((b.spent / b.budget) * 100) : 0;
+      return [b.category, fmtRupees(b.spent), fmtRupees(b.budget), `${pct}%`];
+    });
+
+    doc.autoTable({
+      startY: y,
+      head: [['Category', 'Spent', 'Budget', 'Used']],
+      body: cbRows,
+      theme: 'striped',
+      headStyles: { fillColor: ACCENT_RGB, textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
+      styles: { fontSize: 9, cellPadding: 3, textColor: INK },
+      columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' } },
+      margin: { left: 14, right: 14 },
+    });
+  }
+
+  // --- Footer ---
+  const pageCount = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(...MUTED);
+    doc.text(
+      `Generated ${new Date().toLocaleDateString('en-IN')} · Page ${i}/${pageCount}`,
+      pageW / 2, doc.internal.pageSize.getHeight() - 10,
+      { align: 'center' }
+    );
+  }
+
+  // Save
+  const filename = `expenses-${data.month}.pdf`;
+  doc.save(filename);
+  toast(`Report downloaded: ${filename}`);
+}
 
 // ---------- Populate category dropdowns ----------
 function populateCategorySelect(selectId) {
