@@ -584,12 +584,18 @@ router.get('/report-data', async (req, res) => {
 
 // --------- AI Chat route ---------
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
 
 // Rate limiter: 20 requests/hour per IP
 const rateLimitMap = new Map();
 const RATE_LIMIT = 20;
 const RATE_WINDOW = 60 * 60 * 1000;
+
+// Cache Gemini's SQL plan briefly; data is still queried fresh from Postgres.
+const geminiCache = new Map();
+const GEMINI_CACHE_TTL = 5 * 60 * 1000;
+const GEMINI_CACHE_MAX = 100;
 
 function checkRateLimit(ip) {
   const now = Date.now();
@@ -609,7 +615,96 @@ setInterval(() => {
   for (const [ip, entry] of rateLimitMap) {
     if (now - entry.windowStart > RATE_WINDOW) rateLimitMap.delete(ip);
   }
+  for (const [key, entry] of geminiCache) {
+    if (now - entry.createdAt > GEMINI_CACHE_TTL) geminiCache.delete(key);
+  }
 }, 10 * 60 * 1000);
+
+class GeminiApiError extends Error {
+  constructor({ status, message, code, details }) {
+    super(message);
+    this.name = 'GeminiApiError';
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+function getGeminiApiKey() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+    const err = new Error('GEMINI_API_KEY is not configured.');
+    err.code = 'GEMINI_KEY_MISSING';
+    throw err;
+  }
+  return apiKey.trim();
+}
+
+function parseGeminiErrorBody(body) {
+  try {
+    const parsed = JSON.parse(body);
+    const error = parsed.error || parsed;
+    return {
+      code: error.status || error.code,
+      message: error.message || 'Gemini request failed.',
+      details: error.details || [],
+    };
+  } catch (_err) {
+    return { code: null, message: body || 'Gemini request failed.', details: [] };
+  }
+}
+
+function geminiErrorForUser(err) {
+  if (err.code === 'GEMINI_KEY_MISSING') {
+    return 'GEMINI_API_KEY is not configured. Add it locally and in Vercel Environment Variables, then redeploy.';
+  }
+
+  if (err instanceof GeminiApiError) {
+    const msg = String(err.message || '');
+    if (err.status === 429 || err.code === 'RESOURCE_EXHAUSTED') {
+      return 'Gemini quota/rate limit reached. Check Google AI Studio Usage/Billing for this API key project, wait for quota reset, enable billing, or switch to a project with available quota.';
+    }
+    if (err.status === 400 && /api key not valid|API_KEY_INVALID|key not valid/i.test(msg)) {
+      return 'Gemini API key is invalid. Create or rotate the key in Google AI Studio, update local .env and Vercel, then redeploy.';
+    }
+    if (err.status === 403) {
+      return 'Gemini API access was denied. Check that the API key is enabled, unrestricted correctly, and belongs to a project allowed to use Gemini.';
+    }
+    return `Gemini request failed (${err.status}). Check the configured model and Google AI Studio project status.`;
+  }
+
+  return 'Gemini is temporarily unavailable. Try again later.';
+}
+
+function safeGeminiLog(err) {
+  if (err instanceof GeminiApiError) {
+    return `${err.status} ${err.code || ''} ${err.message}`.trim();
+  }
+  return err.message;
+}
+
+function getGeminiCacheKey(question) {
+  return `${GEMINI_MODEL}:${question.trim().toLowerCase()}`;
+}
+
+function getCachedGeminiResult(question) {
+  const key = getGeminiCacheKey(question);
+  const entry = geminiCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.createdAt > GEMINI_CACHE_TTL) {
+    geminiCache.delete(key);
+    return null;
+  }
+  return { ...entry.result };
+}
+
+function setCachedGeminiResult(question, result) {
+  if (geminiCache.size >= GEMINI_CACHE_MAX) {
+    const oldestKey = geminiCache.keys().next().value;
+    if (oldestKey) geminiCache.delete(oldestKey);
+  }
+  geminiCache.set(getGeminiCacheKey(question), { createdAt: Date.now(), result: { ...result } });
+}
 
 const DANGEROUS_SQL = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|EXEC|EXECUTE|INTO\s+OUTFILE|LOAD_FILE|COPY|pg_sleep|pg_read|information_schema)\b/i;
 
@@ -653,8 +748,8 @@ Respond with ONLY valid JSON (no markdown fences): {"sql": "SELECT ...", "explan
 If not answerable with SQL: {"sql": null, "explanation": "reason"}`;
 }
 
-async function callGemini(question, apiKey) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+async function callGemini(question, apiKey, model = GEMINI_MODEL) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -670,12 +765,22 @@ async function callGemini(question, apiKey) {
   });
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
-    throw new Error(`Gemini ${res.status}: ${errBody.slice(0, 200)}`);
+    const parsed = parseGeminiErrorBody(errBody);
+    throw new GeminiApiError({
+      status: res.status,
+      code: parsed.code,
+      message: parsed.message,
+      details: parsed.details,
+    });
   }
   const data = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Empty Gemini response');
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch (_err) {
+    throw new Error('Invalid Gemini JSON response');
+  }
 }
 
 function tryFallback(question) {
@@ -720,7 +825,11 @@ router.post('/ask', async (req, res) => {
   try {
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
     if (!checkRateLimit(ip)) {
-      return res.status(429).json({ answer: 'Rate limit reached (20/hour). Try again later.', sql: null, data: null });
+      return res.status(429).json({
+        answer: 'Chat cooldown reached for this browser/IP (20 questions per hour). Please try again later.',
+        sql: null,
+        data: null,
+      });
     }
 
     const { question } = req.body || {};
@@ -733,15 +842,18 @@ router.post('/ask', async (req, res) => {
 
     let geminiResult;
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error('No API key configured in Vercel. Please check your Environment Variables.');
-      geminiResult = await callGemini(question.trim(), apiKey);
+      const cleanQuestion = question.trim();
+      geminiResult = getCachedGeminiResult(cleanQuestion);
+      if (!geminiResult) {
+        geminiResult = await callGemini(cleanQuestion, getGeminiApiKey());
+        setCachedGeminiResult(cleanQuestion, geminiResult);
+      }
     } catch (err) {
-      console.error('[API] Gemini error:', err.message);
+      console.error('[API] Gemini error:', safeGeminiLog(err));
       geminiResult = tryFallback(question.trim());
       if (!geminiResult) {
         return res.json({
-          answer: `I encountered an error: ${err.message}. If this says "API key not valid", you may have pasted a typo in Vercel!`,
+          answer: geminiErrorForUser(err),
           sql: null,
           data: null,
         });
