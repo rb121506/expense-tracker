@@ -344,7 +344,7 @@ h2 {
 }
 .cat-row {
   display: grid;
-  grid-template-columns: 130px 1fr auto;
+  grid-template-columns: max-content 1fr auto;
   align-items: center;
   gap: 0.75rem;
 }
@@ -357,6 +357,7 @@ h2 {
   text-transform: uppercase;
   letter-spacing: 0.14em;
   color: var(--ink-2);
+  white-space: nowrap;
 }
 .cat-dot {
   width: 7px;
@@ -736,7 +737,7 @@ code {
   .ledger .date { font-size: 0.75rem; }
   .quick-totals { gap: 1.5rem; }
   .quick-total-num { font-size: 1.4rem; }
-  .cat-row { grid-template-columns: 110px 1fr auto; }
+  .cat-row { grid-template-columns: max-content 1fr auto; }
   .row.spread { flex-wrap: wrap; gap: 0.75rem; }
   .insights-grid { grid-template-columns: repeat(2, 1fr); }
   .catbudget-row { grid-template-columns: 90px 1fr auto auto; font-size: 0.85rem; }
