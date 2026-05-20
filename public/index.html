@@ -13,12 +13,34 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
+
+    <!-- Auth overlay -->
+    <div id="auth-overlay" class="auth-overlay hidden">
+      <div class="auth-box">
+        <h2>Passcode</h2>
+        <p class="kicker" style="margin-bottom:1.5rem">Enter your dashboard passcode to continue</p>
+        <form id="auth-form" autocomplete="off">
+          <input id="auth-input" type="password" placeholder="passcode" autofocus />
+          <button type="submit" class="link-btn">unlock &rarr;</button>
+        </form>
+        <p id="auth-error" class="warning hidden" style="margin-top:1rem"></p>
+      </div>
+    </div>
+
+    <div id="app-wrap">
     <header class="masthead">
       <div class="brand">
         <p class="kicker" id="current-period">—</p>
         <h1>Expenses<span class="serif-dot">.</span></h1>
       </div>
-      <button id="refresh-btn" class="link-btn" aria-label="Refresh">refresh &#x21bb;</button>
+      <div class="masthead-actions">
+        <div class="month-switcher">
+          <button id="month-prev" class="month-arrow" aria-label="Previous month">&larr;</button>
+          <span id="month-label" class="kicker month-label">—</span>
+          <button id="month-next" class="month-arrow" aria-label="Next month">&rarr;</button>
+        </div>
+        <button id="refresh-btn" class="link-btn" aria-label="Refresh">refresh &#x21bb;</button>
+      </div>
     </header>
 
     <main class="container">
@@ -46,7 +68,7 @@
       <hr class="hairline" />
 
       <!-- Quick totals: Today / Week -->
-      <section class="section">
+      <section class="section" id="quick-totals-section">
         <div class="quick-totals">
           <div class="quick-total">
             <span class="kicker">Today</span>
@@ -56,6 +78,32 @@
           <div class="quick-total">
             <span class="kicker">This week</span>
             <span id="stat-week" class="serif quick-total-num">&#x20B9;0</span>
+          </div>
+        </div>
+      </section>
+
+      <hr class="hairline" />
+
+      <!-- Insights -->
+      <section class="section" id="insights-section">
+        <h2>Insights</h2>
+        <div class="insights-grid" id="insights-grid">
+          <div class="insight-card">
+            <span class="kicker">Avg daily</span>
+            <span class="insight-value serif" id="insight-avg">—</span>
+          </div>
+          <div class="insight-card">
+            <span class="kicker">Projected</span>
+            <span class="insight-value serif" id="insight-projected">—</span>
+          </div>
+          <div class="insight-card">
+            <span class="kicker">Highest day</span>
+            <span class="insight-value serif" id="insight-highest">—</span>
+            <span class="insight-sub kicker" id="insight-highest-day"></span>
+          </div>
+          <div class="insight-card">
+            <span class="kicker">Vs last month</span>
+            <span class="insight-value serif" id="insight-change">—</span>
           </div>
         </div>
       </section>
@@ -75,6 +123,32 @@
         <form id="budget-form" class="underline-form" autocomplete="off">
           <input id="budget-input" type="number" min="1" step="1" placeholder="Set a new monthly budget" />
           <button type="submit" class="link-btn">save &rarr;</button>
+        </form>
+      </section>
+
+      <hr class="hairline" />
+
+      <!-- Category Budgets -->
+      <section class="section">
+        <div class="row spread">
+          <h2>Category Budgets</h2>
+          <button id="toggle-catbudget-form" class="link-btn">+ add</button>
+        </div>
+        <div id="catbudget-list"></div>
+        <form id="catbudget-form" class="add-form catbudget-form hidden" autocomplete="off">
+          <label>
+            <span class="kicker">Category</span>
+            <select id="catbudget-category" required>
+              <option value="" disabled selected>Choose...</option>
+            </select>
+          </label>
+          <label>
+            <span class="kicker">Budget</span>
+            <input id="catbudget-amount" type="number" min="1" step="1" required placeholder="0" />
+          </label>
+          <div class="add-actions">
+            <button type="submit" class="link-btn">set budget &rarr;</button>
+          </div>
         </form>
       </section>
 
@@ -198,6 +272,157 @@
 
       <hr class="hairline" />
 
+      <!-- Recurring Expenses -->
+      <section class="section">
+        <div class="row spread">
+          <h2>Recurring</h2>
+          <button id="toggle-recurring-form" class="link-btn">+ add</button>
+        </div>
+        <div id="recurring-list"></div>
+        <form id="recurring-form" class="add-form recurring-form hidden" autocomplete="off">
+          <label>
+            <span class="kicker">Amount</span>
+            <input id="rec-amount" type="number" min="1" step="0.01" required placeholder="0" />
+          </label>
+          <label>
+            <span class="kicker">Category</span>
+            <select id="rec-category" required>
+              <option value="" disabled selected>Choose...</option>
+              <option>Food</option>
+              <option>Transport</option>
+              <option>Entertainment</option>
+              <option>College</option>
+              <option>Gym</option>
+              <option>Shopping</option>
+              <option>Health</option>
+              <option>Skincare</option>
+              <option>Miscellaneous</option>
+            </select>
+          </label>
+          <label>
+            <span class="kicker">Description</span>
+            <input id="rec-description" type="text" placeholder="e.g. Netflix subscription" />
+          </label>
+          <label>
+            <span class="kicker">Day of month (1-28)</span>
+            <input id="rec-day" type="number" min="1" max="28" value="1" required />
+          </label>
+          <div class="add-actions">
+            <button type="submit" class="link-btn">add recurring &rarr;</button>
+          </div>
+        </form>
+      </section>
+
+      <hr class="hairline" />
+
+      <!-- Search & Filter -->
+      <section class="section">
+        <div class="row spread">
+          <h2>Search & Filter</h2>
+          <button id="toggle-filters" class="link-btn">show filters</button>
+        </div>
+        <div id="filter-panel" class="filter-panel hidden">
+          <form id="filter-form" class="add-form" autocomplete="off">
+            <label>
+              <span class="kicker">Category</span>
+              <select id="filter-category">
+                <option value="">All categories</option>
+                <option>Food</option>
+                <option>Transport</option>
+                <option>Entertainment</option>
+                <option>College</option>
+                <option>Gym</option>
+                <option>Shopping</option>
+                <option>Health</option>
+                <option>Skincare</option>
+                <option>Miscellaneous</option>
+              </select>
+            </label>
+            <label>
+              <span class="kicker">Search text</span>
+              <input id="filter-search" type="text" placeholder="description..." />
+            </label>
+            <label>
+              <span class="kicker">Date from</span>
+              <input id="filter-date-from" type="date" />
+            </label>
+            <label>
+              <span class="kicker">Date to</span>
+              <input id="filter-date-to" type="date" />
+            </label>
+            <label>
+              <span class="kicker">Min amount</span>
+              <input id="filter-amount-min" type="number" min="0" step="0.01" placeholder="0" />
+            </label>
+            <label>
+              <span class="kicker">Max amount</span>
+              <input id="filter-amount-max" type="number" min="0" step="0.01" placeholder="0" />
+            </label>
+            <div class="add-actions" style="grid-column:1/-1;gap:1rem;display:flex">
+              <button type="submit" class="link-btn">search &rarr;</button>
+              <button type="button" id="filter-clear" class="link-btn">clear</button>
+              <button type="button" id="filter-export" class="link-btn">export csv &darr;</button>
+            </div>
+          </form>
+        </div>
+        <div id="search-results" class="hidden">
+          <p class="kicker" id="search-results-count" style="margin-bottom:0.75rem"></p>
+          <div class="table-wrap">
+            <table class="ledger compact">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Description</th>
+                  <th>Category</th>
+                  <th class="right">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="search-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <hr class="hairline" />
+
+      <!-- Import Data -->
+      <section class="section">
+        <div class="row spread">
+          <h2>Import</h2>
+          <span class="kicker">CSV upload</span>
+        </div>
+        <p class="muted" style="font-size:0.85rem;margin-bottom:1rem">
+          Upload a CSV with columns: <code>Date, Amount, Category, Description</code>
+        </p>
+        <div class="import-zone" id="import-zone">
+          <input type="file" id="import-file" accept=".csv" class="hidden" />
+          <button type="button" id="import-btn" class="link-btn">choose csv file &uarr;</button>
+        </div>
+        <div id="import-preview" class="hidden">
+          <p class="kicker" id="import-preview-count" style="margin-bottom:0.75rem"></p>
+          <div class="table-wrap" style="max-height:240px;overflow-y:auto">
+            <table class="ledger compact">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Amount</th>
+                  <th>Category</th>
+                  <th>Description</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="import-tbody"></tbody>
+            </table>
+          </div>
+          <div class="add-actions" style="margin-top:1rem">
+            <button type="button" id="import-confirm" class="link-btn">import all &rarr;</button>
+            <button type="button" id="import-cancel" class="link-btn">cancel</button>
+          </div>
+        </div>
+      </section>
+
+      <hr class="hairline" />
+
       <!-- Recent -->
       <section class="section">
         <div class="row spread">
@@ -226,6 +451,49 @@
         <span class="kicker">Logged via Telegram · @rishabhexpensetrackerbot</span>
       </footer>
     </main>
+    </div>
+
+    <!-- Edit modal -->
+    <div id="edit-modal" class="modal-overlay hidden">
+      <div class="modal-box">
+        <div class="row spread" style="margin-bottom:1.5rem">
+          <h2>Edit expense</h2>
+          <button id="edit-close" class="row-x" style="font-size:1.4rem">&times;</button>
+        </div>
+        <form id="edit-form" class="add-form" autocomplete="off">
+          <input type="hidden" id="edit-id" />
+          <label>
+            <span class="kicker">Amount</span>
+            <input id="edit-amount" type="number" min="0" step="0.01" required />
+          </label>
+          <label>
+            <span class="kicker">Category</span>
+            <select id="edit-category" required>
+              <option>Food</option>
+              <option>Transport</option>
+              <option>Entertainment</option>
+              <option>College</option>
+              <option>Gym</option>
+              <option>Shopping</option>
+              <option>Health</option>
+              <option>Skincare</option>
+              <option>Miscellaneous</option>
+            </select>
+          </label>
+          <label class="span-2">
+            <span class="kicker">Description</span>
+            <input id="edit-description" type="text" />
+          </label>
+          <label>
+            <span class="kicker">Date</span>
+            <input id="edit-date" type="date" />
+          </label>
+          <div class="add-actions">
+            <button type="submit" class="link-btn">save changes &rarr;</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <div id="toast" class="toast hidden"></div>
 

@@ -34,11 +34,81 @@ function currentMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-function periodLabel() {
-  const d = new Date();
-  const month = d.toLocaleString('en-US', { month: 'long' });
-  return `${month.toLowerCase()} ${d.getFullYear()} · personal ledger`;
+function monthLabel(monthStr) {
+  const [y, m] = monthStr.split('-').map(Number);
+  const d = new Date(y, m - 1, 1);
+  return d.toLocaleString('en-US', { month: 'long', year: 'numeric' }).toLowerCase();
 }
+
+function periodLabel(monthStr) {
+  return `${monthLabel(monthStr)} · personal ledger`;
+}
+
+function prevMonth(m) {
+  const [y, mo] = m.split('-').map(Number);
+  const d = new Date(y, mo - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function nextMonth(m) {
+  const [y, mo] = m.split('-').map(Number);
+  const d = new Date(y, mo, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// ---------- Auth ----------
+let authToken = localStorage.getItem('expense_auth') || '';
+
+async function checkAuth() {
+  try {
+    const { required } = await (await fetch('/api/auth/check')).json();
+    if (!required) {
+      document.getElementById('app-wrap').classList.remove('hidden');
+      return true;
+    }
+    // Try stored token
+    if (authToken) {
+      const res = await fetch('/api/budget', { headers: { 'x-passcode': authToken } });
+      if (res.ok) {
+        document.getElementById('app-wrap').classList.remove('hidden');
+        return true;
+      }
+    }
+    // Show login
+    document.getElementById('auth-overlay').classList.remove('hidden');
+    document.getElementById('app-wrap').classList.add('hidden');
+    return false;
+  } catch (e) {
+    document.getElementById('app-wrap').classList.remove('hidden');
+    return true;
+  }
+}
+
+document.getElementById('auth-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const passcode = document.getElementById('auth-input').value;
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passcode }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      authToken = data.token || passcode;
+      localStorage.setItem('expense_auth', authToken);
+      document.getElementById('auth-overlay').classList.add('hidden');
+      document.getElementById('app-wrap').classList.remove('hidden');
+      refreshAll();
+    } else {
+      document.getElementById('auth-error').textContent = data.error || 'Wrong passcode';
+      document.getElementById('auth-error').classList.remove('hidden');
+    }
+  } catch (err) {
+    document.getElementById('auth-error').textContent = 'Connection error';
+    document.getElementById('auth-error').classList.remove('hidden');
+  }
+});
 
 // ---------- Toast ----------
 const toastEl = document.getElementById('toast');
@@ -53,16 +123,24 @@ function toast(msg, type = '') {
 
 // ---------- API ----------
 async function api(path, opts = {}) {
-  const res = await fetch(`/api${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  if (authToken) headers['x-passcode'] = authToken;
+  const res = await fetch(`/api${path}`, { ...opts, headers });
+  if (res.status === 401) {
+    localStorage.removeItem('expense_auth');
+    authToken = '';
+    checkAuth();
+    throw new Error('Unauthorized');
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `HTTP ${res.status}`);
   }
   return res.json();
 }
+
+// ---------- State ----------
+let selectedMonth = currentMonth();
 
 // ---------- Palette ----------
 const INK = '#1e1a14';
@@ -273,7 +351,10 @@ function renderTable(rows) {
           </span>
         </td>
         <td class="right amount">${fmtRupees(e.amount)}</td>
-        <td class="right"><button class="row-x" data-delete="${e.id}" aria-label="Delete">×</button></td>
+        <td class="right">
+          <button class="row-edit" data-edit="${e.id}" data-amount="${e.amount}" data-category="${escapeHTML(e.category)}" data-description="${escapeHTML(e.description || '')}" data-date="${(e.date || '').slice(0, 10)}" aria-label="Edit">&#9998;</button>
+          <button class="row-x" data-delete="${e.id}" aria-label="Delete">&times;</button>
+        </td>
       </tr>`
     )
     .join('');
@@ -316,11 +397,93 @@ function renderBudget({ budget, spent, percent }) {
   remEl.classList.toggle('good', budget - spent >= 0);
 }
 
+// ---------- Insights ----------
+function renderInsights(data) {
+  document.getElementById('insight-avg').textContent = fmtRupees(data.avgDaily);
+  document.getElementById('insight-projected').textContent = fmtRupees(data.projected);
+
+  const highestEl = document.getElementById('insight-highest');
+  const highestDayEl = document.getElementById('insight-highest-day');
+  if (data.highestDay) {
+    highestEl.textContent = fmtRupees(data.highestDay.total);
+    highestDayEl.textContent = formatDayName(data.highestDay.day);
+  } else {
+    highestEl.textContent = '—';
+    highestDayEl.textContent = '';
+  }
+
+  const changeEl = document.getElementById('insight-change');
+  if (data.prevTotal === 0 && data.currentTotal === 0) {
+    changeEl.textContent = '—';
+    changeEl.className = 'insight-value serif';
+  } else if (data.prevTotal === 0) {
+    changeEl.textContent = 'new';
+    changeEl.className = 'insight-value serif';
+  } else {
+    const sign = data.monthChange > 0 ? '+' : '';
+    changeEl.textContent = `${sign}${data.monthChange}%`;
+    changeEl.className = `insight-value serif ${data.monthChange > 0 ? 'bad' : 'good'}`;
+  }
+}
+
+// ---------- Category Budgets ----------
+function renderCategoryBudgets(budgets) {
+  const container = document.getElementById('catbudget-list');
+  if (!budgets.length) {
+    container.innerHTML = '<div class="empty-state">No category budgets set</div>';
+    return;
+  }
+  container.innerHTML = budgets.map(b => {
+    const color = CATEGORY_COLORS[b.category] || '#7b6f5e';
+    const pct = Math.min(b.percent, 100);
+    const warn = b.percent >= 100 ? 'danger' : b.percent >= 80 ? 'warn' : '';
+    return `
+      <div class="catbudget-row">
+        <div class="cat-label">
+          <span class="cat-dot" style="background:${color}"></span>
+          ${escapeHTML(b.category)}
+        </div>
+        <div class="catbudget-bar-wrap">
+          <div class="thin-bar" style="flex:1">
+            <div class="thin-bar-fill ${warn}" style="width:${pct}%;background:${color}"></div>
+          </div>
+          <span class="kicker catbudget-pct">${Math.round(b.percent)}%</span>
+        </div>
+        <span class="cat-amount">${fmtRupees(b.spent)} / ${fmtRupees(b.budget)}</span>
+        <button class="row-x" data-delete-catbudget="${escapeHTML(b.category)}" aria-label="Remove">&times;</button>
+      </div>`;
+  }).join('');
+}
+
+// ---------- Recurring Expenses ----------
+function renderRecurring(items) {
+  const container = document.getElementById('recurring-list');
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-state">No recurring expenses</div>';
+    return;
+  }
+  container.innerHTML = items.map(r => {
+    const color = CATEGORY_COLORS[r.category] || '#7b6f5e';
+    return `
+      <div class="recurring-row ${r.active ? '' : 'paused'}">
+        <div class="cat-label">
+          <span class="cat-dot" style="background:${color}"></span>
+          ${escapeHTML(r.description || r.category)}
+        </div>
+        <span class="kicker">day ${r.day_of_month}</span>
+        <span class="cat-amount">${fmtRupees(r.amount)}</span>
+        <div class="recurring-actions">
+          <button class="link-btn small" data-toggle-recurring="${r.id}" data-active="${r.active}">${r.active ? 'pause' : 'resume'}</button>
+          <button class="row-x" data-delete-recurring="${r.id}">&times;</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
 // ---------- Tabs ----------
 const tabs = document.querySelectorAll('.tab');
 const panels = document.querySelectorAll('.tab-panel');
 
-// Cache data for re-rendering charts on tab switch
 let cachedMonthSummary = null;
 let cachedWeekData = null;
 
@@ -331,7 +494,6 @@ tabs.forEach((tab) => {
     tab.classList.add('active');
     document.getElementById(`panel-${tab.dataset.tab}`).classList.add('active');
 
-    // Re-render charts after panel becomes visible (Chart.js needs visible canvas)
     requestAnimationFrame(() => {
       if (tab.dataset.tab === 'month' && cachedMonthSummary) {
         renderCategoryChart(cachedMonthSummary.byCategory);
@@ -344,80 +506,169 @@ tabs.forEach((tab) => {
   });
 });
 
+// ---------- Month switcher ----------
+function updateMonthUI() {
+  document.getElementById('month-label').textContent = monthLabel(selectedMonth);
+  document.getElementById('current-period').textContent = periodLabel(selectedMonth);
+
+  // Hide quick totals if not current month
+  const isNow = selectedMonth === currentMonth();
+  document.getElementById('quick-totals-section').classList.toggle('hidden', !isNow);
+}
+
+document.getElementById('month-prev').addEventListener('click', () => {
+  selectedMonth = prevMonth(selectedMonth);
+  updateMonthUI();
+  refreshAll();
+});
+
+document.getElementById('month-next').addEventListener('click', () => {
+  selectedMonth = nextMonth(selectedMonth);
+  updateMonthUI();
+  refreshAll();
+});
+
 // ---------- Loaders ----------
 async function refreshAll() {
   try {
-    document.getElementById('current-period').textContent = periodLabel();
+    updateMonthUI();
 
-    const [summary, budget, expenses, todayData, weekData] = await Promise.all([
-      api(`/summary?month=${currentMonth()}`),
-      api('/budget'),
-      api(`/expenses?month=${currentMonth()}`),
-      api('/summary/today'),
-      api('/summary/week'),
-    ]);
+    const isNow = selectedMonth === currentMonth();
+
+    const promises = [
+      api(`/summary?month=${selectedMonth}`),
+      api(`/budget?month=${selectedMonth}`),
+      api(`/expenses?month=${selectedMonth}`),
+      api(`/insights?month=${selectedMonth}`),
+      api(`/category-budgets?month=${selectedMonth}`),
+      api('/recurring'),
+    ];
+
+    if (isNow) {
+      promises.push(api('/summary/today'));
+      promises.push(api('/summary/week'));
+    }
+
+    const results = await Promise.all(promises);
+    const [summary, budget, expenses, insights, catBudgets, recurring, todayData, weekData] = results;
 
     // Hero
     document.getElementById('stat-count').textContent = summary.count;
     renderBudget(budget);
 
-    // Quick totals
-    document.getElementById('stat-today').textContent = fmtRupees(todayData.total);
-    document.getElementById('stat-week').textContent = fmtRupees(weekData.total);
+    // Quick totals (only current month)
+    if (isNow && todayData && weekData) {
+      document.getElementById('stat-today').textContent = fmtRupees(todayData.total);
+      document.getElementById('stat-week').textContent = fmtRupees(weekData.total);
 
-    // Today panel
-    document.getElementById('panel-today-total').textContent = fmtRupees(todayData.total);
-    document.getElementById('panel-today-count').textContent = `${todayData.count} entr${todayData.count === 1 ? 'y' : 'ies'}`;
-    renderCategoryBars('today-categories', todayData.byCategory);
-    renderCompactTable('today-tbody', todayData.expenses, false);
+      // Today panel
+      document.getElementById('panel-today-total').textContent = fmtRupees(todayData.total);
+      document.getElementById('panel-today-count').textContent = `${todayData.count} entr${todayData.count === 1 ? 'y' : 'ies'}`;
+      renderCategoryBars('today-categories', todayData.byCategory);
+      renderCompactTable('today-tbody', todayData.expenses, false);
 
-    // Week panel
-    cachedWeekData = weekData;
-    document.getElementById('panel-week-total').textContent = fmtRupees(weekData.total);
-    document.getElementById('panel-week-count').textContent = `${weekData.count} entr${weekData.count === 1 ? 'y' : 'ies'}`;
-    renderCategoryBars('week-categories', weekData.byCategory);
-    // Only render week chart if panel is visible
-    if (document.getElementById('panel-week').classList.contains('active')) {
-      weekDailyChart = renderBarChart('chart-week-daily', weekData.byDay, weekDailyChart, formatDayName);
+      // Week panel
+      cachedWeekData = weekData;
+      document.getElementById('panel-week-total').textContent = fmtRupees(weekData.total);
+      document.getElementById('panel-week-count').textContent = `${weekData.count} entr${weekData.count === 1 ? 'y' : 'ies'}`;
+      renderCategoryBars('week-categories', weekData.byCategory);
+      if (document.getElementById('panel-week').classList.contains('active')) {
+        weekDailyChart = renderBarChart('chart-week-daily', weekData.byDay, weekDailyChart, formatDayName);
+      }
+      renderCompactTable('week-tbody', weekData.expenses, true);
     }
-    renderCompactTable('week-tbody', weekData.expenses, true);
 
     // Month panel
     cachedMonthSummary = summary;
     document.getElementById('panel-month-total').textContent = fmtRupees(summary.total);
     document.getElementById('panel-month-count').textContent = `${summary.count} entr${summary.count === 1 ? 'y' : 'ies'}`;
-    // Only render month charts if panel is visible
     if (document.getElementById('panel-month').classList.contains('active')) {
       renderCategoryChart(summary.byCategory);
       dailyChart = renderBarChart('chart-daily', summary.byDay, dailyChart);
     }
     renderCategoryBars('month-categories', summary.byCategory);
 
+    // Insights
+    renderInsights(insights);
+
+    // Category budgets
+    renderCategoryBudgets(catBudgets);
+
+    // Recurring
+    renderRecurring(recurring);
+
     // Recent table
     renderTable(expenses);
   } catch (err) {
     console.error(err);
-    toast(`Couldn't load — ${err.message}`, 'error');
+    if (err.message !== 'Unauthorized') {
+      toast(`Couldn't load — ${err.message}`, 'error');
+    }
   }
 }
 
 // ---------- Events ----------
 document.getElementById('refresh-btn').addEventListener('click', refreshAll);
 
+// Delete expense
 document.getElementById('expense-tbody').addEventListener('click', async (e) => {
-  const btn = e.target.closest('[data-delete]');
-  if (!btn) return;
-  const id = btn.getAttribute('data-delete');
-  if (!confirm('Delete this entry?')) return;
-  try {
-    await api(`/expenses/${id}`, { method: 'DELETE' });
-    toast('Entry removed');
-    refreshAll();
-  } catch (err) {
-    toast(`Couldn't delete — ${err.message}`, 'error');
+  const delBtn = e.target.closest('[data-delete]');
+  if (delBtn) {
+    const id = delBtn.getAttribute('data-delete');
+    if (!confirm('Delete this entry?')) return;
+    try {
+      await api(`/expenses/${id}`, { method: 'DELETE' });
+      toast('Entry removed');
+      refreshAll();
+    } catch (err) {
+      toast(`Couldn't delete — ${err.message}`, 'error');
+    }
+    return;
+  }
+
+  // Edit expense
+  const editBtn = e.target.closest('[data-edit]');
+  if (editBtn) {
+    document.getElementById('edit-id').value = editBtn.dataset.edit;
+    document.getElementById('edit-amount').value = editBtn.dataset.amount;
+    document.getElementById('edit-category').value = editBtn.dataset.category;
+    document.getElementById('edit-description').value = editBtn.dataset.description;
+    document.getElementById('edit-date').value = editBtn.dataset.date;
+    document.getElementById('edit-modal').classList.remove('hidden');
   }
 });
 
+// Edit modal
+document.getElementById('edit-close').addEventListener('click', () => {
+  document.getElementById('edit-modal').classList.add('hidden');
+});
+
+document.getElementById('edit-modal').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('edit-modal')) {
+    document.getElementById('edit-modal').classList.add('hidden');
+  }
+});
+
+document.getElementById('edit-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = document.getElementById('edit-id').value;
+  const body = {
+    amount: document.getElementById('edit-amount').value,
+    category: document.getElementById('edit-category').value,
+    description: document.getElementById('edit-description').value,
+    date: document.getElementById('edit-date').value || undefined,
+  };
+  try {
+    await api(`/expenses/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+    document.getElementById('edit-modal').classList.add('hidden');
+    toast('Entry updated');
+    refreshAll();
+  } catch (err) {
+    toast(`Couldn't update — ${err.message}`, 'error');
+  }
+});
+
+// Add expense
 document.getElementById('add-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = {
@@ -437,12 +688,13 @@ document.getElementById('add-form').addEventListener('submit', async (e) => {
   }
 });
 
+// Budget form
 document.getElementById('budget-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const amount = document.getElementById('budget-input').value;
   if (!amount) return;
   try {
-    await api('/budget', { method: 'PUT', body: JSON.stringify({ amount }) });
+    await api('/budget', { method: 'PUT', body: JSON.stringify({ amount, month: selectedMonth }) });
     document.getElementById('budget-input').value = '';
     toast('Budget updated');
     refreshAll();
@@ -451,5 +703,294 @@ document.getElementById('budget-form').addEventListener('submit', async (e) => {
   }
 });
 
+// ---------- Category Budget events ----------
+document.getElementById('toggle-catbudget-form').addEventListener('click', () => {
+  document.getElementById('catbudget-form').classList.toggle('hidden');
+});
+
+document.getElementById('catbudget-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    category: document.getElementById('catbudget-category').value,
+    budget: document.getElementById('catbudget-amount').value,
+    month: selectedMonth,
+  };
+  try {
+    await api('/category-budgets', { method: 'PUT', body: JSON.stringify(body) });
+    document.getElementById('catbudget-form').classList.add('hidden');
+    document.getElementById('catbudget-form').reset();
+    toast('Category budget set');
+    refreshAll();
+  } catch (err) {
+    toast(`Couldn't set — ${err.message}`, 'error');
+  }
+});
+
+document.getElementById('catbudget-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-delete-catbudget]');
+  if (!btn) return;
+  const cat = btn.dataset.deleteCatbudget;
+  try {
+    await api(`/category-budgets/${encodeURIComponent(cat)}?month=${selectedMonth}`, { method: 'DELETE' });
+    toast('Category budget removed');
+    refreshAll();
+  } catch (err) {
+    toast(`Couldn't remove — ${err.message}`, 'error');
+  }
+});
+
+// ---------- Recurring events ----------
+document.getElementById('toggle-recurring-form').addEventListener('click', () => {
+  document.getElementById('recurring-form').classList.toggle('hidden');
+});
+
+document.getElementById('recurring-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = {
+    amount: document.getElementById('rec-amount').value,
+    category: document.getElementById('rec-category').value,
+    description: document.getElementById('rec-description').value,
+    day_of_month: document.getElementById('rec-day').value,
+  };
+  try {
+    await api('/recurring', { method: 'POST', body: JSON.stringify(body) });
+    document.getElementById('recurring-form').classList.add('hidden');
+    document.getElementById('recurring-form').reset();
+    toast('Recurring expense added');
+    refreshAll();
+  } catch (err) {
+    toast(`Couldn't add — ${err.message}`, 'error');
+  }
+});
+
+document.getElementById('recurring-list').addEventListener('click', async (e) => {
+  const toggleBtn = e.target.closest('[data-toggle-recurring]');
+  if (toggleBtn) {
+    const id = toggleBtn.dataset.toggleRecurring;
+    const isActive = toggleBtn.dataset.active === 'true';
+    try {
+      await api(`/recurring/${id}`, { method: 'PUT', body: JSON.stringify({ active: !isActive }) });
+      toast(isActive ? 'Paused' : 'Resumed');
+      refreshAll();
+    } catch (err) {
+      toast(`Couldn't update — ${err.message}`, 'error');
+    }
+    return;
+  }
+
+  const delBtn = e.target.closest('[data-delete-recurring]');
+  if (delBtn) {
+    if (!confirm('Delete this recurring expense?')) return;
+    try {
+      await api(`/recurring/${delBtn.dataset.deleteRecurring}`, { method: 'DELETE' });
+      toast('Recurring expense deleted');
+      refreshAll();
+    } catch (err) {
+      toast(`Couldn't delete — ${err.message}`, 'error');
+    }
+  }
+});
+
+// ---------- Search & Filter events ----------
+document.getElementById('toggle-filters').addEventListener('click', () => {
+  const panel = document.getElementById('filter-panel');
+  const btn = document.getElementById('toggle-filters');
+  panel.classList.toggle('hidden');
+  btn.textContent = panel.classList.contains('hidden') ? 'show filters' : 'hide filters';
+});
+
+document.getElementById('filter-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  await runSearch();
+});
+
+document.getElementById('filter-clear').addEventListener('click', () => {
+  document.getElementById('filter-form').reset();
+  document.getElementById('search-results').classList.add('hidden');
+});
+
+async function runSearch() {
+  const params = new URLSearchParams();
+  const cat = document.getElementById('filter-category').value;
+  const search = document.getElementById('filter-search').value;
+  const dateFrom = document.getElementById('filter-date-from').value;
+  const dateTo = document.getElementById('filter-date-to').value;
+  const amtMin = document.getElementById('filter-amount-min').value;
+  const amtMax = document.getElementById('filter-amount-max').value;
+
+  if (cat) params.set('category', cat);
+  if (search) params.set('search', search);
+  if (dateFrom) params.set('dateFrom', dateFrom);
+  if (dateTo) params.set('dateTo', dateTo);
+  if (amtMin) params.set('amountMin', amtMin);
+  if (amtMax) params.set('amountMax', amtMax);
+  if (selectedMonth) params.set('month', selectedMonth);
+
+  try {
+    const rows = await api(`/expenses/search?${params}`);
+    document.getElementById('search-results').classList.remove('hidden');
+    const total = rows.reduce((s, r) => s + r.amount, 0);
+    document.getElementById('search-results-count').textContent = `${rows.length} results · ${fmtRupees(total)} total`;
+    renderCompactTable('search-tbody', rows, true);
+  } catch (err) {
+    toast(`Search failed — ${err.message}`, 'error');
+  }
+}
+
+// Export CSV
+document.getElementById('filter-export').addEventListener('click', () => {
+  const params = new URLSearchParams();
+  const cat = document.getElementById('filter-category').value;
+  const search = document.getElementById('filter-search').value;
+  const dateFrom = document.getElementById('filter-date-from').value;
+  const dateTo = document.getElementById('filter-date-to').value;
+  const amtMin = document.getElementById('filter-amount-min').value;
+  const amtMax = document.getElementById('filter-amount-max').value;
+
+  if (cat) params.set('category', cat);
+  if (search) params.set('search', search);
+  if (dateFrom) params.set('dateFrom', dateFrom);
+  if (dateTo) params.set('dateTo', dateTo);
+  if (amtMin) params.set('amountMin', amtMin);
+  if (amtMax) params.set('amountMax', amtMax);
+  if (selectedMonth) params.set('month', selectedMonth);
+  if (authToken) params.set('_passcode', authToken);
+
+  window.location.href = `/api/expenses/export?${params}`;
+});
+
+// ---------- Import events ----------
+document.getElementById('import-btn').addEventListener('click', () => {
+  document.getElementById('import-file').click();
+});
+
+let pendingImportEntries = [];
+
+document.getElementById('import-file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const text = ev.target.result;
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) {
+      toast('CSV must have a header row and at least one data row', 'error');
+      return;
+    }
+
+    // Parse header
+    const header = lines[0].toLowerCase();
+    const hasHeader = header.includes('date') || header.includes('amount') || header.includes('category');
+    const startLine = hasHeader ? 1 : 0;
+
+    pendingImportEntries = [];
+    const tbody = document.getElementById('import-tbody');
+    let html = '';
+
+    for (let i = startLine; i < lines.length; i++) {
+      const cols = parseCSVLine(lines[i]);
+      if (cols.length < 2) continue;
+
+      // Try to detect column order: Date, Amount, Category, Description
+      let date = '', amount = '', category = '', description = '';
+      if (cols.length >= 4) {
+        [date, amount, category, description] = cols;
+      } else if (cols.length === 3) {
+        [date, amount, category] = cols;
+      } else {
+        [amount, category] = cols;
+      }
+
+      const amt = parseFloat(amount);
+      const valid = amt > 0 && category.trim();
+      const status = valid ? 'ok' : 'invalid';
+
+      const entry = {
+        date: date.trim() || localDateISO(),
+        amount: amt || 0,
+        category: category.trim() || 'Miscellaneous',
+        description: (description || '').trim(),
+      };
+      if (valid) pendingImportEntries.push(entry);
+
+      html += `<tr class="${valid ? '' : 'import-invalid'}">
+        <td class="date">${escapeHTML(entry.date)}</td>
+        <td>${entry.amount}</td>
+        <td>${escapeHTML(entry.category)}</td>
+        <td>${escapeHTML(entry.description)}</td>
+        <td class="kicker">${status}</td>
+      </tr>`;
+    }
+
+    tbody.innerHTML = html;
+    document.getElementById('import-preview-count').textContent = `${pendingImportEntries.length} valid rows of ${lines.length - (hasHeader ? 1 : 0)} total`;
+    document.getElementById('import-preview').classList.remove('hidden');
+  };
+  reader.readAsText(file);
+});
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { current += ch; }
+    } else {
+      if (ch === '"') { inQuotes = true; }
+      else if (ch === ',') { result.push(current); current = ''; }
+      else { current += ch; }
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+document.getElementById('import-confirm').addEventListener('click', async () => {
+  if (!pendingImportEntries.length) return;
+  try {
+    const res = await api('/expenses/import', {
+      method: 'POST',
+      body: JSON.stringify({ entries: pendingImportEntries }),
+    });
+    toast(`Imported ${res.imported} entries`);
+    document.getElementById('import-preview').classList.add('hidden');
+    document.getElementById('import-file').value = '';
+    pendingImportEntries = [];
+    refreshAll();
+  } catch (err) {
+    toast(`Import failed — ${err.message}`, 'error');
+  }
+});
+
+document.getElementById('import-cancel').addEventListener('click', () => {
+  document.getElementById('import-preview').classList.add('hidden');
+  document.getElementById('import-file').value = '';
+  pendingImportEntries = [];
+});
+
+// ---------- Populate category dropdowns ----------
+function populateCategorySelect(selectId) {
+  const sel = document.getElementById(selectId);
+  if (sel.options.length > 1) return; // already populated
+  const cats = ['Food', 'Transport', 'Entertainment', 'College', 'Gym', 'Shopping', 'Health', 'Skincare', 'Miscellaneous'];
+  cats.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  });
+}
+
+// ---------- Init ----------
 document.getElementById('add-date').valueAsDate = new Date();
-refreshAll();
+populateCategorySelect('catbudget-category');
+
+(async () => {
+  const authed = await checkAuth();
+  if (authed) refreshAll();
+})();
