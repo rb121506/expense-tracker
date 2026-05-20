@@ -830,9 +830,9 @@ code {
   max-height: 360px;
   min-height: 120px;
 }
-.chat-msg { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.75rem; }
-.chat-msg.chat-user { align-items: flex-end; }
-.chat-msg.chat-ai { align-items: flex-start; }
+.chat-msg { display: flex; margin-bottom: 0.6rem; }
+.chat-msg.chat-user { justify-content: flex-end; }
+.chat-msg.chat-ai { justify-content: flex-start; }
 
 .chat-bubble {
   max-width: 88%;
@@ -855,8 +855,7 @@ code {
 }
 
 .chat-sql-toggle {
-  display: inline-block;
-  align-self: flex-start;
+  display: none;
   background: 0;
   border: 0;
   color: var(--ink-3);
@@ -880,13 +879,7 @@ code {
   word-break: break-all;
 }
 
-.chat-data-table {
-  margin-top: 0.25rem;
-  font-size: 0.72rem;
-  border-collapse: collapse;
-  width: 100%;
-  max-width: 88%;
-}
+.chat-data-table { display: none; }
 .chat-data-table th, .chat-data-table td {
   padding: 0.2rem 0.35rem;
   text-align: left;

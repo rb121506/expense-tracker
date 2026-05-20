@@ -1271,14 +1271,13 @@ function populateCategorySelect(selectId) {
   }
 
   // Add a message bubble
-  function addChatMessage(type, text, sql, data) {
+  function addChatMessage(type, text) {
     const wrap = document.createElement('div');
     wrap.className = `chat-msg chat-${type}`;
 
     const bubble = document.createElement('div');
     bubble.className = 'chat-bubble';
 
-    // Main text (allow simple HTML for formatting)
     if (type === 'ai') {
       bubble.innerHTML = escapeHTML(text).replace(/\n/g, '<br>');
     } else {
@@ -1286,75 +1285,6 @@ function populateCategorySelect(selectId) {
     }
 
     wrap.appendChild(bubble);
-
-    // Expandable SQL toggle (AI messages only)
-    if (sql) {
-      const sqlToggle = document.createElement('button');
-      sqlToggle.className = 'chat-sql-toggle';
-      sqlToggle.textContent = 'Show query ▸';
-      const sqlBlock = document.createElement('pre');
-      sqlBlock.className = 'chat-sql hidden';
-      sqlBlock.textContent = sql;
-
-      sqlToggle.addEventListener('click', () => {
-        sqlBlock.classList.toggle('hidden');
-        sqlToggle.textContent = sqlBlock.classList.contains('hidden')
-          ? 'Show query ▸'
-          : 'Hide query ▾';
-      });
-
-      wrap.appendChild(sqlToggle);
-      wrap.appendChild(sqlBlock);
-    }
-
-    // Data table (AI messages with tabular results)
-    if (data && data.length) {
-      const table = document.createElement('table');
-      table.className = 'chat-data-table';
-
-      // Header row from object keys
-      const keys = Object.keys(data[0]);
-      const thead = document.createElement('thead');
-      const headRow = document.createElement('tr');
-      keys.forEach((k) => {
-        const th = document.createElement('th');
-        th.textContent = k.replace(/_/g, ' ');
-        headRow.appendChild(th);
-      });
-      thead.appendChild(headRow);
-      table.appendChild(thead);
-
-      // Body rows (max 20 visible)
-      const tbody = document.createElement('tbody');
-      const visibleRows = data.slice(0, 20);
-      visibleRows.forEach((row) => {
-        const tr = document.createElement('tr');
-        keys.forEach((k) => {
-          const td = document.createElement('td');
-          const val = row[k];
-          // Format numbers that look like currency
-          if (typeof val === 'number' && val >= 1) {
-            td.textContent = fmtRupees(val);
-          } else {
-            td.textContent = val != null ? String(val) : '—';
-          }
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      });
-      table.appendChild(tbody);
-      wrap.appendChild(table);
-
-      if (data.length > 20) {
-        const more = document.createElement('div');
-        more.className = 'muted';
-        more.style.fontSize = '0.75rem';
-        more.style.marginTop = '4px';
-        more.textContent = `+ ${data.length - 20} more rows`;
-        wrap.appendChild(more);
-      }
-    }
-
     messages.appendChild(wrap);
     scrollChat();
     return wrap;
@@ -1396,9 +1326,7 @@ function populateCategorySelect(selectId) {
       });
 
       removeLoading();
-
-      // res should have { answer, sql?, data?, cached? }
-      addChatMessage('ai', res.answer, res.sql || null, res.data || null);
+      addChatMessage('ai', res.answer);
     } catch (err) {
       removeLoading();
       addChatMessage('ai', `Sorry, something went wrong: ${err.message}`);
