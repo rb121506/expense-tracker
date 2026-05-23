@@ -22,6 +22,24 @@ function authMiddleware(req, res, next) {
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
+// --------- Telegram webhook (before auth — Telegram calls this) ---------
+const { handleUpdate } = require('../bot-webhook');
+const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+
+router.post('/telegram', async (req, res) => {
+  // Verify secret token if set
+  if (WEBHOOK_SECRET && req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    await handleUpdate(req.body);
+  } catch (err) {
+    console.error('[API] Telegram webhook error:', err);
+  }
+  // Always return 200 so Telegram doesn't retry
+  res.json({ ok: true });
+});
+
 // Auth check endpoint (before auth middleware on other routes)
 router.get('/auth/check', (_req, res) => {
   res.json({ required: !!PASSCODE });

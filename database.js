@@ -64,6 +64,13 @@ async function initDB() {
       created_at TEXT NOT NULL DEFAULT ''
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_states (
+      chat_id TEXT PRIMARY KEY,
+      state_json TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_expenses_month ON expenses(month)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_catbudgets_month ON category_budgets(month)`);
@@ -476,6 +483,25 @@ async function bulkAddExpenses(entries) {
   return results;
 }
 
+// ---------- Chat state (for /add multi-step in serverless) ----------
+async function getChatState(chatId) {
+  const rows = await query('SELECT state_json FROM chat_states WHERE chat_id = $1', [String(chatId)]);
+  if (!rows.length) return null;
+  try { return JSON.parse(rows[0].state_json); } catch { return null; }
+}
+
+async function setChatState(chatId, state) {
+  await query(
+    `INSERT INTO chat_states (chat_id, state_json, updated_at) VALUES ($1, $2, $3)
+     ON CONFLICT(chat_id) DO UPDATE SET state_json = EXCLUDED.state_json, updated_at = EXCLUDED.updated_at`,
+    [String(chatId), JSON.stringify(state), new Date().toISOString()]
+  );
+}
+
+async function deleteChatState(chatId) {
+  await query('DELETE FROM chat_states WHERE chat_id = $1', [String(chatId)]);
+}
+
 module.exports = {
   initDB,
   getPool,
@@ -514,4 +540,7 @@ module.exports = {
   getTopMerchants,
   getMonthlyTrend,
   getUpcomingRecurring,
+  getChatState,
+  setChatState,
+  deleteChatState,
 };
