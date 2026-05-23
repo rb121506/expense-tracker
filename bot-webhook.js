@@ -33,16 +33,47 @@ function parsePositiveAmount(value) {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
-// Send a message via Telegram Bot API (HTTP POST)
+// Use https module (works on all Node versions, no fetch dependency)
+const https = require('https');
+
+function httpsPost(url, body) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const parsed = new URL(url);
+    const req = https.request({
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+    }, (res) => {
+      let chunks = '';
+      res.on('data', (d) => { chunks += d; });
+      res.on('end', () => resolve({ status: res.statusCode, body: chunks }));
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+// Send a message via Telegram Bot API
 async function sendMessage(chatId, text) {
   const token = BOT_TOKEN();
-  if (!token) return;
+  if (!token) { console.error('[BOT] No bot token'); return; }
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
-  });
+
+  // Try Markdown first
+  let res = await httpsPost(url, { chat_id: chatId, text, parse_mode: 'Markdown' });
+
+  // If Markdown fails (bad formatting), retry as plain text
+  if (res.status !== 200) {
+    console.error('[BOT] Markdown send failed:', res.body);
+    res = await httpsPost(url, { chat_id: chatId, text });
+  }
+
+  if (res.status !== 200) {
+    console.error('[BOT] Send failed:', res.status, res.body);
+  }
 }
 
 // ---------- Command handlers ----------
