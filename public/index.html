@@ -10,7 +10,8 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..700,0..100&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/style.css?v=5" />
+    <link rel="stylesheet" href="/style.css?v=9" />
+    <script>(function(){var t=localStorage.getItem('theme')||(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t);})();</script>
   </head>
   <body>
 
@@ -39,6 +40,7 @@
           <span id="month-label" class="kicker month-label">—</span>
           <button id="month-next" class="month-arrow" aria-label="Next month">&rarr;</button>
         </div>
+        <button id="theme-toggle" class="link-btn" aria-label="Toggle dark mode">dark</button>
         <button id="refresh-btn" class="link-btn" aria-label="Refresh">refresh &#x21bb;</button>
       </div>
     </header>
@@ -538,6 +540,6 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
-    <script src="/app.js?v=3"></script>
+    <script src="/app.js?v=7"></script>
   </body>
 </html>

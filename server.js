@@ -6,7 +6,6 @@ const path = require('path');
 const express = require('express');
 
 const apiRouter = require('./routes/api');
-const { startBot } = require('./bot');
 const { initDB } = require('./database');
 
 const PORT = process.env.PORT || 3000;
@@ -46,7 +45,10 @@ async function start() {
     console.log(`   API base:   http://localhost:${PORT}/api`);
   });
 
-  startBot(TOKEN, OWNER_ID);
+  // NOTE: The Telegram bot is intentionally NOT started here.
+  // It runs 24/7 as a Vercel webhook (routes/api.js -> bot-webhook.js).
+  // Starting the polling bot locally (bot.js) would auto-delete the
+  // production webhook and silently break the bot. Do not re-add startBot().
 }
 
 start().catch((err) => {

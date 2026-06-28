@@ -38,6 +38,15 @@ function parsePositiveAmount(value) {
 const addState = new Map();
 
 function startBot(token, ownerId) {
+  // ⛔ DISABLED: This polling bot must NOT run. Polling auto-deletes the
+  // production Telegram webhook (api/telegram), which silently kills the bot
+  // the moment this laptop sleeps. The bot now runs 24/7 via the Vercel
+  // webhook (routes/api.js -> bot-webhook.js). Do not re-enable polling.
+  if (!process.env.ALLOW_POLLING_BOT) {
+    console.warn('[BOT] Polling bot is disabled by design. The Telegram bot runs as a Vercel webhook. Set ALLOW_POLLING_BOT=1 only if you really know what you are doing (it will delete the production webhook).');
+    return null;
+  }
+
   if (!token || token === 'your_token_here') {
     console.warn('[BOT] TELEGRAM_BOT_TOKEN not set — bot is disabled. Update .env to enable.');
     return null;

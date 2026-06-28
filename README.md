@@ -51,6 +51,9 @@ TELEGRAM_BOT_TOKEN=123456:ABC-your-token
 MY_TELEGRAM_USER_ID=987654321
 PORT=3000
 DATABASE_URL=postgresql://user:pass@ep-xxx.region.aws.neon.tech/dbname?sslmode=require
+DASHBOARD_PASSCODE=
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL=gemini-2.5-flash-lite
 ```
 
 > If you leave `TELEGRAM_BOT_TOKEN` or `MY_TELEGRAM_USER_ID` as the placeholder values, the dashboard still runs but the bot stays disabled. This keeps the bot private by default.
@@ -105,6 +108,24 @@ Open <http://localhost:3000>. You'll see:
 - Manual add-expense form
 - Recent expenses table with delete buttons
 
+## 8. AI Chat Setup
+
+The dashboard chat uses Gemini to turn spending questions into safe read-only SQL.
+
+1. Create or rotate a Gemini key in [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. Add `GEMINI_API_KEY` to local `.env`.
+3. Keep `GEMINI_MODEL=gemini-2.5-flash-lite` unless you intentionally want a different model.
+4. In Vercel, add the same `GEMINI_API_KEY` and `GEMINI_MODEL` under Environment Variables.
+5. Redeploy Vercel after changing environment variables.
+
+To test the key locally:
+
+```bash
+npm run test:gemini
+```
+
+If a real Gemini key was ever pasted into code, screenshots, or chat, rotate it in Google AI Studio before using the app again.
+
 ---
 
 ## 📁 Project Structure
@@ -143,6 +164,7 @@ expense-tracker/
 
 - Default monthly budget is **₹5000** until you set one.
 - Set `DATABASE_URL` locally and in Vercel before starting the app.
+- Set `GEMINI_API_KEY` locally and in Vercel if you want AI Chat.
 - The bot starts only when both `TELEGRAM_BOT_TOKEN` and `MY_TELEGRAM_USER_ID` are set.
 - For 24/7 use, run with **pm2**: `pm2 start server.js --name expenses`.
 
@@ -161,3 +183,5 @@ The migration script uses Node's built-in `node:sqlite` module, so run it with *
 - **Bot not responding?** Make sure your `MY_TELEGRAM_USER_ID` matches the account you're messaging from. The bot ignores everyone else.
 - **`polling_error` ETELEGRAM 409**: another instance of the bot is running. Stop it first.
 - **Database error on startup**: make sure `DATABASE_URL` is set and points to your Neon database.
+- **Gemini says quota exceeded / 429**: this is a Google AI Studio project quota or billing issue, not usually a typo. Check Usage/Billing, wait for quota reset, enable billing, or use another project with available quota.
+- **Gemini API key invalid**: rotate/create a key in Google AI Studio, update local `.env` and Vercel Environment Variables, then redeploy.

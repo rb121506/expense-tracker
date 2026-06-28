@@ -805,21 +805,72 @@ function tryFallback(question) {
   const q = question.toLowerCase();
   const curMonth = db.currentMonth();
   const today = db.todayISO();
-  if (q.includes('today') && (q.includes('spend') || q.includes('total') || q.includes('how much'))) {
-    return { sql: `SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE substring(date, 1, 10) = '${today}'`, explanation: "Today's total spending" };
+
+  // Week date range helper
+  const now = new Date();
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - now.getDay());
+  const weekStartISO = weekStart.toISOString().slice(0, 10);
+
+  // --- Today ---
+  if (q.includes('today')) {
+    return { sql: `SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS count FROM expenses WHERE substring(date,1,10)='${today}'`, explanation: "Today's spending" };
   }
-  if ((q.includes('month') || q.includes('total')) && (q.includes('spend') || q.includes('how much'))) {
-    return { sql: `SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE month = '${curMonth}'`, explanation: "This month's total spending" };
+
+  // --- This week ---
+  if (q.includes('week') || q.includes('this week') || q.includes('weekly')) {
+    return { sql: `SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS count FROM expenses WHERE substring(date,1,10) >= '${weekStartISO}' AND substring(date,1,10) <= '${today}'`, explanation: "Spending this week" };
   }
-  if (q.includes('budget')) {
-    return { sql: `SELECT monthly_budget AS budget FROM budgets WHERE month = '${curMonth}'`, explanation: "Current monthly budget" };
+
+  // --- Biggest / most expensive / highest ---
+  if (q.includes('biggest') || q.includes('most expensive') || q.includes('highest') || q.includes('largest') || q.includes('top expense')) {
+    return { sql: `SELECT description, amount, category, substring(date,1,10) AS date FROM expenses WHERE month='${curMonth}' ORDER BY amount DESC LIMIT 1`, explanation: "Biggest single expense this month" };
   }
-  if (q.includes('categor')) {
-    return { sql: `SELECT category, SUM(amount) AS total, COUNT(*) AS count FROM expenses WHERE month = '${curMonth}' GROUP BY category ORDER BY total DESC`, explanation: "Category breakdown this month" };
+
+  // --- Top 5 ---
+  if (q.includes('top 5') || q.includes('top five') || q.includes('top expenses') || q.includes('most spent')) {
+    return { sql: `SELECT description, amount, category, substring(date,1,10) AS date FROM expenses WHERE month='${curMonth}' ORDER BY amount DESC LIMIT 5`, explanation: "Top 5 expenses this month" };
   }
-  if (q.includes('most expensive') || q.includes('highest') || q.includes('biggest')) {
-    return { sql: `SELECT description, amount, category, substring(date, 1, 10) AS date FROM expenses WHERE month = '${curMonth}' ORDER BY amount DESC LIMIT 5`, explanation: "Top 5 most expensive items this month" };
+
+  // --- Specific category spending ---
+  const CATEGORIES = ['food', 'transport', 'subscriptions', 'drinks', 'entertainment', 'college', 'gym', 'shopping', 'health', 'skincare', 'miscellaneous'];
+  for (const cat of CATEGORIES) {
+    if (q.includes(cat)) {
+      const catTitle = cat.charAt(0).toUpperCase() + cat.slice(1);
+      return { sql: `SELECT description, amount, substring(date,1,10) AS date FROM expenses WHERE month='${curMonth}' AND LOWER(category)='${cat}' ORDER BY date DESC`, explanation: `${catTitle} expenses this month` };
+    }
   }
+
+  // --- Category breakdown ---
+  if (q.includes('categor') || q.includes('breakdown') || q.includes('by category')) {
+    return { sql: `SELECT category, SUM(amount) AS total, COUNT(*) AS count FROM expenses WHERE month='${curMonth}' GROUP BY category ORDER BY total DESC`, explanation: "Spending by category this month" };
+  }
+
+  // --- Budget ---
+  if (q.includes('budget') || q.includes('remaining') || q.includes('left')) {
+    return { sql: `SELECT monthly_budget AS budget FROM budgets WHERE month='${curMonth}'`, explanation: "Monthly budget" };
+  }
+
+  // --- Average / avg ---
+  if (q.includes('average') || q.includes('avg') || q.includes('per day')) {
+    return { sql: `SELECT ROUND(SUM(amount)/GREATEST(COUNT(DISTINCT substring(date,1,10)),1),0) AS avg_per_day, COUNT(*) AS transactions FROM expenses WHERE month='${curMonth}'`, explanation: "Average daily spending this month" };
+  }
+
+  // --- Count ---
+  if (q.includes('how many') || q.includes('count') || q.includes('number of')) {
+    return { sql: `SELECT COUNT(*) AS count FROM expenses WHERE month='${curMonth}'`, explanation: "Number of expenses this month" };
+  }
+
+  // --- Total / month / how much ---
+  if (q.includes('total') || q.includes('month') || q.includes('how much') || q.includes('spent') || q.includes('spend')) {
+    return { sql: `SELECT COALESCE(SUM(amount),0) AS total, COUNT(*) AS count FROM expenses WHERE month='${curMonth}'`, explanation: "Total spending this month" };
+  }
+
+  // --- Recent / last / latest ---
+  if (q.includes('recent') || q.includes('latest') || q.includes('last') || q.includes('new')) {
+    return { sql: `SELECT description, amount, category, substring(date,1,10) AS date FROM expenses WHERE month='${curMonth}' ORDER BY date DESC, id DESC LIMIT 5`, explanation: "5 most recent expenses" };
+  }
+
   return null;
 }
 
@@ -852,10 +903,10 @@ router.post('/ask', async (req, res) => {
 
     const { question } = req.body || {};
     if (!question || typeof question !== 'string' || question.trim().length < 3) {
-      return res.status(400).json({ answer: 'Please ask a question about your expenses.', sql: null, data: null });
+      return res.json({ answer: 'Please ask a question about your expenses.', sql: null, data: null });
     }
     if (question.length > 500) {
-      return res.status(400).json({ answer: 'Question too long (max 500 characters).', sql: null, data: null });
+      return res.json({ answer: 'Question too long (max 500 characters).', sql: null, data: null });
     }
 
     let geminiResult;

@@ -151,6 +151,8 @@ const ACCENT = '#a94a26';
 const CATEGORY_COLORS = {
   Food: '#a94a26',
   Transport: '#3a5a6b',
+  Subscriptions: '#4a6fa5',
+  Drinks: '#8a4a6b',
   Entertainment: '#6e4a6b',
   College: '#4e6f4a',
   Gym: '#7a3324',
@@ -287,7 +289,7 @@ function renderCategoryBars(containerId, byCategory) {
       const pct = maxTotal > 0 ? (r.total / maxTotal) * 100 : 0;
       const category = escapeHTML(r.category);
       return `
-        <div class="cat-row">
+        <div class="cat-row" data-category="${category}" data-container="${containerId}">
           <div class="cat-label">
             <span class="cat-dot" style="background:${color}"></span>
             ${category}
@@ -296,9 +298,94 @@ function renderCategoryBars(containerId, byCategory) {
             <div class="cat-bar-fill" style="width:${pct}%;background:${color}"></div>
           </div>
           <span class="cat-amount">${fmtRupees(r.total)}</span>
-        </div>`;
+          <span class="cat-chevron">▶</span>
+        </div>
+        <div class="cat-detail" id="detail-${containerId}-${category.replace(/\s+/g, '-')}"></div>`;
     })
     .join('');
+
+  container.querySelectorAll('.cat-row').forEach((row) => {
+    row.addEventListener('click', () => toggleCategoryDetail(row));
+  });
+}
+
+async function toggleCategoryDetail(row) {
+  const category = row.dataset.category;
+  const containerId = row.dataset.container;
+  const detailId = `detail-${containerId}-${category.replace(/\s+/g, '-')}`;
+  const detail = document.getElementById(detailId);
+
+  // collapse if already open
+  if (row.classList.contains('expanded')) {
+    row.classList.remove('expanded');
+    detail.classList.remove('open');
+    return;
+  }
+
+  // collapse any other open detail in same container
+  const parent = row.closest('.cat-bars') || row.parentElement;
+  parent.querySelectorAll('.cat-row.expanded').forEach((r) => {
+    r.classList.remove('expanded');
+    const otherId = `detail-${r.dataset.container}-${r.dataset.category.replace(/\s+/g, '-')}`;
+    const otherDetail = document.getElementById(otherId);
+    if (otherDetail) otherDetail.classList.remove('open');
+  });
+
+  row.classList.add('expanded');
+  detail.innerHTML = '<div class="cat-detail-loading">Loading…</div>';
+  detail.classList.add('open');
+
+  try {
+    const params = new URLSearchParams({ category, limit: '100' });
+
+    if (containerId === 'today-categories') {
+      const today = localDateISO();
+      params.set('dateFrom', today);
+      params.set('dateTo', today);
+    } else if (containerId === 'week-categories') {
+      const now = new Date();
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - now.getDay());
+      params.set('dateFrom', localDateISO(weekStart));
+      params.set('dateTo', localDateISO(now));
+    } else {
+      params.set('month', selectedMonth);
+    }
+
+    const expenses = await api(`/expenses/search?${params}`);
+
+    if (!expenses.length) {
+      detail.innerHTML = '<div class="cat-detail-loading">No expenses found</div>';
+      return;
+    }
+
+    const byDay = {};
+    expenses.forEach((e) => {
+      const day = e.date ? e.date.slice(0, 10) : 'Unknown';
+      if (!byDay[day]) byDay[day] = [];
+      byDay[day].push(e);
+    });
+
+    const sortedDays = Object.keys(byDay).sort().reverse();
+
+    detail.innerHTML = `<ul class="cat-detail-list">
+      ${sortedDays
+        .map((day) =>
+          byDay[day]
+            .map(
+              (e) => `<li>
+                <span class="cat-detail-date">${formatDateDMY(day)}</span>
+                <span class="cat-detail-desc">${escapeHTML(e.description) || '—'}</span>
+                <span class="cat-detail-amt">${fmtRupees(e.amount)}</span>
+              </li>`
+            )
+            .join('')
+        )
+        .join('')}
+    </ul>`;
+  } catch (err) {
+    detail.innerHTML = '<div class="cat-detail-loading">Failed to load</div>';
+  }
 }
 
 // ---------- Renderers ----------
@@ -1271,7 +1358,7 @@ function populateCategorySelect(selectId) {
   }
 
   // Add a message bubble
-  function addChatMessage(type, text) {
+  function addChatMessage(type, text, isHTML = false) {
     const wrap = document.createElement('div');
     wrap.className = `chat-msg chat-${type}`;
 
@@ -1279,7 +1366,7 @@ function populateCategorySelect(selectId) {
     bubble.className = 'chat-bubble';
 
     if (type === 'ai') {
-      bubble.innerHTML = escapeHTML(text).replace(/\n/g, '<br>');
+      bubble.innerHTML = isHTML ? text : escapeHTML(text).replace(/\n/g, '<br>');
     } else {
       bubble.textContent = text;
     }
@@ -1326,7 +1413,27 @@ function populateCategorySelect(selectId) {
       });
 
       removeLoading();
-      addChatMessage('ai', res.answer);
+
+      let html = `<p>${escapeHTML(res.answer)}</p>`;
+      if (res.data && res.data.length > 0) {
+        const cols = Object.keys(res.data[0]);
+        html += `<table class="chat-data-table">
+          <thead><tr>${cols.map((c) => `<th>${escapeHTML(c)}</th>`).join('')}</tr></thead>
+          <tbody>${res.data
+            .map(
+              (row) =>
+                `<tr>${cols
+                  .map((c) => {
+                    const v = row[c];
+                    const isAmt = c === 'amount' || c === 'total';
+                    return `<td>${isAmt ? fmtRupees(v) : escapeHTML(String(v ?? '—'))}</td>`;
+                  })
+                  .join('')}</tr>`
+            )
+            .join('')}</tbody>
+        </table>`;
+      }
+      addChatMessage('ai', html, true);
     } catch (err) {
       removeLoading();
       addChatMessage('ai', `Sorry, something went wrong: ${err.message}`);
@@ -1334,6 +1441,22 @@ function populateCategorySelect(selectId) {
 
     input.disabled = false;
     input.focus();
+  });
+})();
+
+// ---------- Dark mode toggle ----------
+(function initTheme() {
+  const btn = document.getElementById('theme-toggle');
+  function applyTheme(dark) {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    btn.textContent = dark ? 'light' : 'dark';
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+  }
+  const saved = localStorage.getItem('theme');
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  applyTheme(saved ? saved === 'dark' : prefersDark);
+  btn.addEventListener('click', () => {
+    applyTheme(document.documentElement.getAttribute('data-theme') !== 'dark');
   });
 })();
 

@@ -6,8 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "check": "node --check server.js && node --check database.js && node --check bot.js && node --check routes/api.js && node --check api/index.js && node --check public/app.js && node --check categories.js",
-    "migrate": "node migrate-sqlite-to-neon.js"
+    "check": "node --check server.js && node --check database.js && node --check bot.js && node --check routes/api.js && node --check api/index.js && node --check public/app.js && node --check categories.js && node --check test-gemini.js",
+    "migrate": "node migrate-sqlite-to-neon.js",
+    "test:gemini": "node test-gemini.js"
   },
   "keywords": [
     "expense",

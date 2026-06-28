@@ -1,13 +1,15 @@
 // Shared expense categories used by the bot and API validation.
 
 const CATEGORY_KEYWORDS = {
-  Food: ['lunch', 'dinner', 'breakfast', 'food', 'dominos', 'zomato', 'swiggy', 'zepto', 'blinkit', 'chai', 'coffee', 'restaurant', 'biryani', 'pizza', 'snacks'],
-  Transport: ['auto', 'uber', 'ola', 'metro', 'bus', 'rickshaw', 'petrol', 'cab', 'rapido'],
-  Entertainment: ['movie', 'netflix', 'spotify', 'game', 'concert', 'bowling'],
+  Food: ['lunch', 'dinner', 'breakfast', 'food', 'dominos', 'zomato', 'swiggy', 'zepto', 'blinkit', 'chai', 'coffee', 'restaurant', 'biryani', 'pizza', 'snacks', 'shawarma', 'faasos', 'momo', 'chinese', 'canteen', 'thali', 'pav bhaji', 'vada pav', 'burger', 'sandwich', 'fries', 'noodles', 'dosa', 'idli'],
+  Transport: ['auto', 'uber', 'ola', 'metro', 'bus', 'rickshaw', 'petrol', 'cab', 'rapido', 'train', 'railway', 'parking', 'diesel', 'bike service', 'servicing'],
+  Subscriptions: ['youtube', 'spotify', 'netflix', 'hotstar', 'prime', 'apple', 'claude', 'subscription', 'ott', 'jiocinema', 'google cloud', 'icloud'],
+  Drinks: ['bar', 'pub', 'wine', 'beer', 'liquor', 'brewery', 'whisky', 'vodka', 'rum', 'cocktail', 'nightlife'],
+  Entertainment: ['movie', 'game', 'concert', 'bowling', 'pickleball', 'cricket', 'gaming', 'theatre', 'amusement'],
   College: ['books', 'printing', 'xerox', 'stationery', 'fees', 'lab'],
   Gym: ['gym', 'protein', 'supplement', 'fitness'],
-  Shopping: ['clothes', 'shoes', 'amazon', 'flipkart', 'mall', 'shirt', 'jeans'],
-  Health: ['medicine', 'pharmacy', 'doctor', 'chemist'],
+  Shopping: ['clothes', 'shoes', 'amazon', 'flipkart', 'mall', 'shirt', 'jeans', 'myntra', 'ajio', 'meesho'],
+  Health: ['medicine', 'pharmacy', 'doctor', 'chemist', 'dermatologist', 'dermat', 'hospital', 'clinic', 'wellness'],
   Skincare: ['moisturizer', 'sunscreen', 'facewash', 'skincare', 'serum'],
 };
 
@@ -17,6 +19,8 @@ const CATEGORIES = Object.freeze([...Object.keys(CATEGORY_KEYWORDS), DEFAULT_CAT
 const CATEGORY_EMOJI = {
   Food: '🍔',
   Transport: '🚗',
+  Subscriptions: '🔄',
+  Drinks: '🍻',
   Entertainment: '🎬',
   College: '🎓',
   Gym: '💪',
